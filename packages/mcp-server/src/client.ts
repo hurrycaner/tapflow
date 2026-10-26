@@ -1451,7 +1451,8 @@ export class TapflowClient {
     return { data: Buffer.from(await res.arrayBuffer()), mimeType: res.headers.get('content-type') ?? 'image/png' }
   }
 
-  private httpBase(): string {
+  /** The relay's http(s) origin, derived from the ws(s) URL this client connects to. */
+  httpBase(): string {
     return this.relayUrl.replace(/^wss?/, (p) => (p === 'wss' ? 'https' : 'http'))
   }
 
