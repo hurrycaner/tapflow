@@ -37,6 +37,7 @@ export { isLocalhostWss } from './relayUrl.js'
 export { pickMaxSize } from './resolution.js'
 export {
   parseSpsVui,
+  parseSpsDimensions,
   rewriteSpsLowLatency,
   rewriteLowLatencySpsInFrame,
 } from './sps.js'

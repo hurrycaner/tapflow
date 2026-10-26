@@ -464,6 +464,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.1
         version: 1.32.1(zod@4.6.7)
+      '@tapflowio/agent-core':
+        specifier: workspace:*
+        version: link:../agent-core
       '@tapflowio/flow-runner':
         specifier: workspace:*
         version: link:../flow-runner

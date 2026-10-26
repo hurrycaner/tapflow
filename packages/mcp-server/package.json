@@ -42,9 +42,10 @@
     "lint": "eslint src"
   },
   "dependencies": {
-    "@tapflowio/protocol": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "@tapflowio/agent-core": "workspace:*",
     "@tapflowio/flow-runner": "workspace:*",
+    "@tapflowio/protocol": "workspace:*",
     "ws": "^8.22.0",
     "zod": "^4.6.7"
   },
