@@ -143,6 +143,20 @@ Connected straight to the relay's port on the Mac it runs on, the MCP server sta
 | `list_runs` | List the run records `tapflow flow run` left on the relay (filter by status, build, flow name, CI or local) |
 | `get_run` | Read one run record: each failed flow's steps (a passed flow's step count), failure message and file path, and screenshots of up to four failed flows |
 | `get_testing_guide` | How to test a mobile feature with these tools: cases to cover, what cannot be tested here, how to avoid false bugs, how to save a verified flow, and the report format |
+| `start_recording` | Start recording the device screen to mp4. Needs `connect_device` and a `buildId`; the file lands in that build's Recordings tab. See [Recording the screen](#recording) |
+| `stop_recording` | Stop recording and upload. Waits up to `waitMs` (default 30 s, at most 50 s); uploads still running come back `pending` |
+| `recording_status` | The state of a recording: each segment's upload `url`, `pending` or failure. Works after `stop_recording` has returned |
+
+## Recording the screen {#recording}
+
+The agent can record the device screen while it works through a scenario, and the file ends up where a person will look for it. The order is the usual one up to launch: `connect_device`, `boot_device`, `install_app` and `launch_app`. Then `start_recording` with the `buildId` (from `list_builds`), the scenario itself, and `stop_recording`.
+
+- **Where it lands.** The build's **Recordings** tab, kept for 72 hours like any recording. A long recording is several files, and each file is its own row there. The `url` list in the `stop_recording` reply is the only record of their order.
+- **What it records.** The device screen as the agent's stream sends it: H.264 at the stream's encode tier, which is 1280 px on the longest side on a LAN relay (1000 px through external access) unless `TAPFLOW_IOS_MAX_SIZE=0` asks for native size. There is no device bezel, which dashboard recordings have, and no audio.
+- **Limits.** A file is cut at 100 MB and the recording continues in a new one. A recording stops at 500 MB in total. One recording runs per MCP server at a time.
+- **Stopping.** `stop_recording` waits up to 30 s for the uploads (`waitMs`, at most 50 s). If some are not done, it lists them as `pending` and they finish in the background; read `recording_status` later for their `url`s.
+- **The token.** Uploading needs `builds:write`, which the API token the server already runs with has.
+- **Older relays and devices.** The relay must be a version that lists `holder-stream`; an older one makes `start_recording` fail with `relay-too-old`. An iOS simulator booted before this version may still stream JPEG, and the tool answers `jpeg-stream`. Call `shutdown_device`, then `boot_device`, and it boots with H.264.
 
 ## Typical workflow
 
