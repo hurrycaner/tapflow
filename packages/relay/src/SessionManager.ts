@@ -38,7 +38,8 @@ export interface Session {
   holderKind: ClientKind | null
   holderLabel: string | null
   /** False when the holder said on `session:start` it does not read the stream (`stream: false`): the relay sends
-   *  it no frames. Kept with the holder rather than on its socket, so it resets with every change of holder. */
+   *  it no frames. Changed later by `session:stream` (holder-only, idempotent). Kept with the holder rather than
+   *  on its socket, so it still resets with every change of holder. */
   holderStream: boolean
   /** Where the holder's current touch began and last was, so its end can be told to watchers as a tap or a swipe
    *  (A2). Kept whether or not anyone watches: a watcher can arrive mid-gesture. Cleared at the end and with the holder. */
@@ -555,6 +556,14 @@ export class SessionManager {
   setDeviceInfo(sessionId: string, info: DeviceDetails): void {
     const session = this.sessions.get(sessionId)
     if (session) session.deviceInfo = info
+  }
+
+  /** False when the session is unknown, so a caller can tell a refused write from a stored one. */
+  setHolderStream(sessionId: string, value: boolean): boolean {
+    const session = this.sessions.get(sessionId)
+    if (!session) return false
+    session.holderStream = value
+    return true
   }
 
   setReadySent(sessionId: string, value: boolean): void {

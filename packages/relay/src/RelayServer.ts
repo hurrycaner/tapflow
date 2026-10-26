@@ -9,7 +9,7 @@ import { SessionManager, isAiClientKind } from './SessionManager.js'
 import type { Session } from './SessionManager.js'
 import type { AgentResources } from './types.js'
 import type { DeviceDetails, UIElement } from './types.js'
-import type { AdmissionRefusal, BootRefusalReason, ChromePayload, LeaseRefusalReason, InputErrorReason, MacAdmission, RelayOutbound, PosturesPayload, WatchActionKind, WatchRefusal } from '@tapflowio/protocol'
+import type { AdmissionRefusal, BootRefusalReason, ChromePayload, LeaseRefusalReason, InputErrorReason, MacAdmission, RelayOutbound, PosturesPayload, SessionStreamRefusal, WatchActionKind, WatchRefusal } from '@tapflowio/protocol'
 import { gestureAction, keyForWatchers } from './lib/watchActions.js'
 import { HostBootGate, GATE_DEFAULTS, type BooterClass, type Effect, type GateEvent, type GateTiming } from './admission/HostBootGate.js'
 import { defaultCap, idleToFree, planCapacity, type CapacityDevice, type CapacityPlan } from './admission/capacity.js'
@@ -1290,8 +1290,9 @@ export class RelayServer {
         // **Not gated on the holder.** Watchers keep receiving frames while the holder is away inside its
         // reconnect grace, which is when `browserSocket` is null.
         const watchers = this.sessions.watchersOf(session.id)
-        // A holder that said it does not read the stream (`stream: false`) is sent nothing: the MCP server and a
-        // runner that is not recording discard every frame, and an iOS session is ~34 Mbit/s of JPEG to do it with.
+        // A holder that is not reading the stream asks for none (`stream: false` at join, `session:stream` later)
+        // and is sent nothing: the MCP server reads it only while recording, and an iOS session is ~34 Mbit/s of
+        // JPEG to discard.
         const holder = session.holderStream ? session.browserSocket : null
         if (!holder && watchers.length === 0) return
         const frameBuf = data as Buffer
@@ -1606,7 +1607,7 @@ export class RelayServer {
         this.sendTo(ws, {
           type: 'agents:listed',
           sessions: this.sessions.list(this.ownerOf(ws), (holder) => this.isAlive(holder), (group) => this.macAdmission(group)),
-          features: ['device-lease', 'launch-options'],
+          features: ['device-lease', 'launch-options', 'holder-stream'],
         })
         break
       }
@@ -1624,6 +1625,7 @@ export class RelayServer {
         break
       }
       case 'watch:start':      this.handleWatchStart(ws, msg); break
+      case 'session:stream':   this.handleSessionStream(ws, msg); break
       // Unanswered, like `session:leave`: nobody waits on it, and closing the socket does the same.
       case 'watch:stop': {
         if (this.sessions.removeWatcher(msg.sessionId, ws)) this.forgetWatcherDropper(ws, msg.sessionId)
@@ -2946,6 +2948,26 @@ export class RelayServer {
       // a keyframe, and a socket starting watches repeatedly must not turn into a stream of IDRs.
       this.idrRequester(session.id)()
     }
+  }
+
+  /**
+   * The holder turns its own frame delivery on or off after joining (the MCP server does it around a recording).
+   * Idempotent: the reply always states the resulting value, so a holder that repeats itself is not refused.
+   */
+  private handleSessionStream(ws: WebSocket, msg: Inbound<'session:stream'>): void {
+    const refuse = (reason: SessionStreamRefusal, message: string) =>
+      this.sendTo(ws, { type: 'session:stream-refused', sessionId: msg.sessionId, reason, message })
+    const session = this.sessions.get(msg.sessionId)
+    if (!session) return refuse('session-not-found', 'Session not found')
+    if (!this.ownsSession(ws, session)) return refuse('not-session-owner', 'Only the connection holding the session can change its stream.')
+    // **No resource gate here, unlike a join.** `holderStream` only gates relay-to-holder forwarding; the agent
+    // encodes whether or not the holder reads, so this message spends no new encode. The join path's gate is
+    // about admitting a new encode, which this is not.
+    this.sessions.setHolderStream(session.id, msg.stream)
+    this.sendTo(ws, { type: 'session:stream-set', sessionId: session.id, stream: msg.stream })
+    // A holder that starts reading mid-GOP cannot decode until a keyframe. Through the session's throttled
+    // requester, as the re-join and watch paths do, so the three callers share one policy and one throttle window.
+    if (msg.stream && session.readySent) this.idrRequester(session.id)()
   }
 
   /** The keyframe-aware sender for one watcher of one session — see `watcherDroppers`. */
