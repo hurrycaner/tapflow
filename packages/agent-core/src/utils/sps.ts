@@ -121,16 +121,25 @@ interface SpsWalk {
   maxDecFrameBuffering: number | null
   /** Bit offset (within RBSP) of bitstream_restriction_flag; -1 if no VUI reached. */
   restrictionFlagPos: number
+  /** Coded (uncropped) size, in macroblocks of the frame (field pairs folded in). */
+  codedWidth: number
+  codedHeight: number
+  frameMbsOnly: boolean
+  /** chroma_format_idc; 1 (4:2:0) when the profile does not carry it. */
+  chromaFormatIdc: number
+  /** frame_cropping offsets in crop units: left, right, top, bottom. */
+  crop: [number, number, number, number]
 }
 
 function walkSps(r: BitReader): SpsWalk {
   const profileIdc = r.bits(8)
+  let chromaFormatIdc = 1
   r.bits(8) // constraint flags + reserved
   const levelIdc = r.bits(8)
   r.ue() // seq_parameter_set_id
 
   if (HIGH_PROFILES.has(profileIdc)) {
-    const chromaFormatIdc = r.ue()
+    chromaFormatIdc = r.ue()
     if (chromaFormatIdc === 3) r.flag() // separate_colour_plane_flag
     r.ue(); r.ue() // bit_depth_luma/chroma_minus8
     r.flag() // qpprime_y_zero_transform_bypass_flag
@@ -161,14 +170,17 @@ function walkSps(r: BitReader): SpsWalk {
   }
   const numRefFrames = r.ue() // max_num_ref_frames
   r.flag() // gaps_in_frame_num_value_allowed_flag
-  r.ue() // pic_width_in_mbs_minus1
-  r.ue() // pic_height_in_map_units_minus1
-  if (!r.flag()) r.flag() // frame_mbs_only_flag → mb_adaptive_frame_field_flag
+  const codedWidth = (r.ue() + 1) * 16 // pic_width_in_mbs_minus1
+  const mapUnitsHeight = (r.ue() + 1) * 16 // pic_height_in_map_units_minus1
+  const frameMbsOnly = r.flag() // frame_mbs_only_flag
+  if (!frameMbsOnly) r.flag() // mb_adaptive_frame_field_flag
   r.flag() // direct_8x8_inference_flag
-  if (r.flag()) { r.ue(); r.ue(); r.ue(); r.ue() } // frame_cropping
+  const crop: [number, number, number, number] = [0, 0, 0, 0]
+  if (r.flag()) { crop[0] = r.ue(); crop[1] = r.ue(); crop[2] = r.ue(); crop[3] = r.ue() } // frame_cropping
 
   const base = {
     profileIdc, levelIdc, numRefFrames,
+    codedWidth, codedHeight: mapUnitsHeight * (frameMbsOnly ? 1 : 2), frameMbsOnly, chromaFormatIdc, crop,
     bitstreamRestriction: false,
     maxNumReorderFrames: null as number | null,
     maxDecFrameBuffering: null as number | null,
@@ -295,4 +307,34 @@ export function rewriteLowLatencySpsInFrame(frame: Uint8Array): Uint8Array {
     result.set(nal, off); off += nal.length
   }
   return result
+}
+
+/**
+ * Displayed picture size (after frame cropping) from an SPS NAL, with or without a leading Annex-B start code.
+ * Null when the NAL is not an SPS or is truncated. The crop units depend on chroma subsampling and on
+ * frame_mbs_only_flag, which is why a 1080-row stream reports 1088 coded rows.
+ */
+export function parseSpsDimensions(spsNal: Uint8Array): { width: number; height: number } | null {
+  let nal = spsNal
+  if (nal.length >= 4 && nal[0] === 0 && nal[1] === 0 && nal[2] === 0 && nal[3] === 1) nal = nal.subarray(4)
+  else if (nal.length >= 3 && nal[0] === 0 && nal[1] === 0 && nal[2] === 1) nal = nal.subarray(3)
+  if (nal.length < 2 || (nal[0]! & 0x1f) !== 7) return null
+  try {
+    const rbsp = toRbsp(nal)
+    const r = new BitReader(rbsp)
+    const w = walkSps(r)
+    // BitReader reads zeros past the end instead of throwing, so a truncated SPS would otherwise
+    // report plausible-looking dimensions.
+    if (r.position > rbsp.length * 8) return null
+    // SubWidthC / SubHeightC per Table 6-1; monochrome and 4:4:4 crop in single samples.
+    const subW = w.chromaFormatIdc === 1 || w.chromaFormatIdc === 2 ? 2 : 1
+    const subH = w.chromaFormatIdc === 1 ? 2 : 1
+    const fieldMul = w.frameMbsOnly ? 1 : 2
+    const [cl, cr, ct, cb] = w.crop
+    const width = w.codedWidth - (cl + cr) * subW
+    const height = w.codedHeight - (ct + cb) * subH * fieldMul
+    return width > 0 && height > 0 ? { width, height } : null
+  } catch {
+    return null
+  }
 }

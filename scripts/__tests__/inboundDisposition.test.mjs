@@ -68,7 +68,8 @@ describe('inbound disposition', () => {
     // 29 as of #542: `device:shutdown-error` gave the shutdown pair the failure member it lacked.
     // 32 by the next count, 36 with the four `watch:*` replies, 37 with `watch:action` (A2), and 38 with
     // `device:boot-waiting` (L2). 40 with the lease pair (S5), which the dashboard never asks for.
-    expect(table_entries.size).toBe(40)
+    // 42 with `session:stream-set` / `session:stream-refused` (the holder-stream pair, T1).
+    expect(table_entries.size).toBe(42)
   })
 
   it('every entry is exactly one of at / ignored', () => {
@@ -162,6 +163,9 @@ describe('inbound disposition', () => {
       // when the viewer landed. It has, and they did — which is the whole point of writing "no branch
       // yet" down rather than leaving an absent branch to speak for itself.
       'session:deviceInfo',
+      // The dashboard never sends `session:stream`; its holder-stream toggle is the MCP recorder's (T1).
+      'session:stream-refused',
+      'session:stream-set',
     ])
   })
 })

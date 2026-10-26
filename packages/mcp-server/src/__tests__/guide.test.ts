@@ -42,8 +42,8 @@ describe('agent guide', () => {
 
   it('holds what every session carries to a budget', async () => {
     const { listBytes } = await connect()
-    // Measured at 13.2 KB of tool list plus 1.7 KB of instructions when this was written; the margin is for a sentence, not a tool.
-    expect(listBytes + INSTRUCTIONS.length).toBeLessThanOrEqual(15_500)
+    // Measured at 15.8 KB of tool list plus 1.7 KB of instructions (17,494 bytes) once start_recording, stop_recording and recording_status joined; the margin is for a sentence, not a tool.
+    expect(listBytes + INSTRUCTIONS.length).toBeLessThanOrEqual(17_700)
   })
 
   it('returns the testing guide only when asked, and keeps it bounded', async () => {

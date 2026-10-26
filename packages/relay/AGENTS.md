@@ -213,9 +213,10 @@ JWT 시크릿은 `getJwtSecret()`으로 **처음 쓸 때** 만든다. `RelayServ
 
 ## HOW NOT
 
-- Do not store or analyze screen data in the relay. **Two exceptions, both uploaded by a flow runner to its own run** — bound to the run's creator, and deleted with the run:
+- Do not store or analyze screen data in the relay. **Three exceptions** — the first two uploaded by a flow runner to its own run, bound to the run's creator and deleted with the run:
   - the screenshot (`api/runs.ts`) — at most one image per flow (the screen it failed on, or a passed flow's last screen), PNG or JPEG by its bytes, at most 5 MB, served back as its own type with `nosniff`;
   - the video (`api/runVideos.ts`) — capped per flow, kept by the retention policy and the disk cap below. The relay reads only the open call's JSON, never the frames.
+  - the recordings store (`api/recordings.ts`) — a video a client already decoded or received, tagged with the session id the client names and bound to the uploader (the dashboard's cookie, or the MCP server's PAT). 72 h TTL, deleted with the build; the relay never reads the bytes.
 
   A stream the relay is forwarding on its own is still never stored.
 - Do not allow session routing without authentication.

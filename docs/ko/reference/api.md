@@ -15,7 +15,7 @@ description: "tapflow REST API 전체 레퍼런스(/api/v1): 인증, 초대, 비
 
 | PAT scope | 엔드포인트 |
 |-----------|-----------|
-| `builds:write` | `POST /builds`, `GET /builds`, `GET /builds/:id`, `POST /comments`, 웹훅 엔드포인트 전체, 실행 기록 쓰기(`POST /runs` 아래) |
+| `builds:write` | `POST /builds`, `GET /builds`, `GET /builds/:id`, `POST /comments`, 웹훅 엔드포인트 전체, 실행 기록 쓰기(`POST /runs` 아래), `POST /recordings/upload` |
 | `view` | `GET /apps`, `GET /runs` 아래, `GET /sessions/:sessionId/screenshot`, `GET /sessions/:sessionId/ui-tree`, `/uploads/` 아래 파일(`/api/v1/`이 아닌 릴레이 루트 경로), 원격에서 여는 기기 세션 WebSocket |
 | `agent` | 원격 에이전트의 WebSocket 연결. 토큰을 발급한 팀원이 Admin인 동안에만 받습니다 |
 
@@ -747,6 +747,8 @@ File:
 ### `POST /api/v1/recordings/upload`
 
 녹화 파일을 업로드합니다. 업로드 후 **72시간** 뒤에 자동 삭제됩니다.
+
+인증: 로그인한 세션 쿠키(모든 역할) 또는 `builds:write` 토큰.
 
 ```
 Content-Type: multipart/form-data

@@ -1110,7 +1110,7 @@ export interface AgentsListed {
   type: 'agents:listed'
   sessions: SessionInfo[]
   /**
-   * What this relay understands beyond the messages every relay does: `'device-lease'` (`device:lease`). A client
+   * What this relay understands beyond the messages every relay does — see `RelayFeature`. A client
    * reads it before sending one, because an older relay drops an unknown message without a word and the client
    * would otherwise learn that only from its own deadline. Optional, unlike the rest of the listing: the
    * dashboard cannot skew from the relay it ships in, but a flow runner can, and an older relay omits the key.
@@ -1120,8 +1120,10 @@ export interface AgentsListed {
 
 /** Values of `AgentsListed.features`. A client meeting one it does not know ignores it.
  *  `'launch-options'`: `app:launch` carries `arguments` and `env` through. An older relay's validator strips both and
- *  still answers `app:launch-done`, so a client checks this before sending either. */
-export type RelayFeature = 'device-lease' | 'launch-options'
+ *  still answers `app:launch-done`, so a client checks this before sending either.
+ *  `'holder-stream'`: the relay answers `session:stream` (a holder turning the device stream on/off mid-session). An
+ *  older relay drops it without a reply, so a client checks this before sending it. */
+export type RelayFeature = 'device-lease' | 'launch-options' | 'holder-stream'
 
 export interface SessionJoined {
   type: 'session:joined'
@@ -1391,6 +1393,8 @@ export type RelayToBrowser =
   | GenericError
   | WatchStarted
   | WatchRefused
+  | SessionStreamSet
+  | SessionStreamRefused
   | WatchHolderLeft
   | WatchEnded
   | WatchAction
@@ -1816,10 +1820,44 @@ export interface SessionStart {
    *  a session nobody may watch — no inference from the credential, which a new auth method would break.
    *  See `ClientKind`. */
   clientKind?: ClientKind
-  /** `false` from a client that never reads the stream (the MCP server; the flow runner when it is not recording
-   *  video): the relay sends this holder no stream frames, video or audio. Watchers are unaffected. Absent or `true`
-   *  is as before. An older relay drops the key and keeps sending. */
+  /** `false` from a client that is not reading the stream (the MCP server outside a recording; the flow runner when it is
+   *  not recording video): the relay sends this holder no stream frames, video or audio. Watchers are unaffected. Absent or `true`
+   *  is as before. An older relay drops the key and keeps sending. A holder changes this later with `session:stream`
+   *  on a relay that lists `'holder-stream'`. */
   stream?: boolean
+}
+
+/**
+ * The session's holder turns the device stream on or off mid-session. Addressed by `sessionId` alone (no
+ * `requestId`), like `watch:start`, and idempotent: the only reply echoes the requested value. The holder uses it to
+ * start or stop receiving the device stream after joining; the `stream` set on `session:start` (`SessionStart.stream`)
+ * is what this changes later. An older relay drops the unknown type without a reply, so a client checks
+ * `AgentsListed.features` for `'holder-stream'` before sending it.
+ */
+export interface SessionStream {
+  type: 'session:stream'
+  sessionId: string
+  stream: boolean
+}
+
+/** Why a `session:stream` was refused. */
+export type SessionStreamRefusal =
+  /** No such session: it ended, or the id was never valid. */
+  | 'session-not-found'
+  /** The sender is not the session's holder. */
+  | 'not-session-owner'
+
+/** Ack to the sender of a `session:stream` only, echoing the value now in force. */
+export interface SessionStreamSet {
+  type: 'session:stream-set'
+  sessionId: string
+  stream: boolean
+}
+
+export interface SessionStreamRefused extends SessionScoped {
+  type: 'session:stream-refused'
+  reason: SessionStreamRefusal
+  message: string
 }
 
 /**
@@ -2134,5 +2172,6 @@ export type BrowserToRelay =
   | NetworkSet
   | WatchStart
   | WatchStop
+  | SessionStream
   | SessionActivity
 

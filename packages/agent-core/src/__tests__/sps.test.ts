@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   parseSpsVui,
+  parseSpsDimensions,
   rewriteSpsLowLatency,
   rewriteLowLatencySpsInFrame,
 } from '../utils/sps.js'
@@ -128,5 +129,66 @@ describe('rewriteLowLatencySpsInFrame (agent-core)', () => {
     const restricted = rewriteSpsLowLatency(vuiNoRestrictionSps(1))!
     const frame = annexB(FOUR, restricted, PPS, IDR)
     expect(rewriteLowLatencySpsInFrame(frame)).toBe(frame)
+  })
+})
+
+// Independent writer of the dimension fields (same layout the android-agent tests use), so the
+// asserted sizes come from the values encoded here rather than from re-running the parser.
+function dimsSps(opts: {
+  profile?: number; chroma?: number; wMbs: number; hUnits: number
+  frameMbsOnly?: boolean; crop?: [number, number, number, number]
+}): Uint8Array {
+  const w = new BitWriter()
+  const profile = opts.profile ?? 66
+  w.bitsN(profile, 8); w.bitsN(0xc0, 8); w.bitsN(31, 8)
+  w.ue(0)
+  if (profile === 100) {
+    w.ue(opts.chroma ?? 1)
+    if (opts.chroma === 3) w.bit(0)
+    w.ue(0); w.ue(0); w.bit(0); w.bit(0) // bit depths, bypass flag, no scaling matrix
+  }
+  w.ue(0); w.ue(0); w.ue(0) // log2_max_frame_num, poc type 0, log2_max_poc_lsb
+  w.ue(1); w.bit(0)         // max_num_ref_frames, gaps
+  w.ue(opts.wMbs - 1); w.ue(opts.hUnits - 1)
+  const only = opts.frameMbsOnly ?? true
+  w.bit(only ? 1 : 0)
+  if (!only) w.bit(0)
+  w.bit(1) // direct_8x8_inference
+  if (opts.crop) { w.bit(1); for (const c of opts.crop) w.ue(c) } else w.bit(0)
+  w.bit(0) // no VUI
+  return w.toNal()
+}
+
+describe('parseSpsDimensions', () => {
+  it('reads 1280x720 from a baseline SPS without cropping', () => {
+    expect(parseSpsDimensions(dimsSps({ wMbs: 80, hUnits: 45 }))).toEqual({ width: 1280, height: 720 })
+  })
+
+  it('applies 4:2:0 cropping: 1080 rows displayed from 1088 coded (high profile)', () => {
+    const sps = dimsSps({ profile: 100, chroma: 1, wMbs: 120, hUnits: 68, crop: [0, 0, 0, 4] })
+    expect(parseSpsDimensions(sps)).toEqual({ width: 1920, height: 1080 })
+  })
+
+  it('crops 4:4:4 in single samples and interlaced in doubled rows', () => {
+    expect(parseSpsDimensions(dimsSps({ profile: 100, chroma: 3, wMbs: 120, hUnits: 68, crop: [0, 0, 0, 8] })))
+      .toEqual({ width: 1920, height: 1080 })
+    // frame_mbs_only=0: 34 map units = 68 MB rows = 1088 rows; crop unit is 2*SubHeightC = 4 rows
+    expect(parseSpsDimensions(dimsSps({ wMbs: 120, hUnits: 34, frameMbsOnly: false, crop: [0, 0, 0, 2] })))
+      .toEqual({ width: 1920, height: 1080 })
+  })
+
+  it('accepts a leading 3- or 4-byte start code', () => {
+    const sps = dimsSps({ wMbs: 80, hUnits: 45 })
+    expect(parseSpsDimensions(annexB(FOUR, sps))).toEqual({ width: 1280, height: 720 })
+    expect(parseSpsDimensions(annexB(THREE, sps))).toEqual({ width: 1280, height: 720 })
+  })
+
+  it('reads the existing VUI fixture (11 MBs = 176x176)', () => {
+    expect(parseSpsDimensions(vuiNoRestrictionSps(1))).toEqual({ width: 176, height: 176 })
+  })
+
+  it('returns null for a non-SPS NAL and for a truncated SPS', () => {
+    expect(parseSpsDimensions(new Uint8Array([0x41, 0x9a, 0x00]))).toBeNull()
+    expect(parseSpsDimensions(new Uint8Array([0x67]))).toBeNull()
   })
 })

@@ -118,7 +118,8 @@ describe('both clients declare what they do with every browser-inbound message',
         // 32 by the next count, 36 once the four `watch:*` replies arrived, 37 with `watch:action` (A2), and 38 with
         // `device:boot-waiting` (L2, the relay holding a person's boot behind another on the same Mac). 40 with the lease
         // pair (S5).
-        expect(table.size).toBe(40)
+        // 42 with `session:stream-set` / `session:stream-refused` (the holder-stream pair, T1).
+        expect(table.size).toBe(42)
       })
 
       it('every entry is exactly one of settles / does / ignored', () => {
@@ -176,10 +177,11 @@ describe('both clients declare what they do with every browser-inbound message',
     // not: `flow-runner` sends no shutdown, so it ignores a pair `mcp-server` settles waiters on, and it reads the
     // chrome and device info into a run's video (A4), which `mcp-server` has no use for. Asserted rather than
     // trusted, because the day they *do* converge is the day this decision should be revisited. The lease pair
-    // differs too: only the flow runner leases, an MCP agent picks its device.
+    // differs too: only the flow runner leases, an MCP agent picks its device. So does the stream pair: only
+    // the MCP recorder toggles a session's video stream.
     const [mcp, flow] = PACKAGES.map(({ dir }) =>
       entries(readFileSync(join(root, dir, 'inboundDisposition.ts'), 'utf8')))
     const differing = [...mcp].filter(([t, v]) => HANDLED.test(v) !== HANDLED.test(flow.get(t) ?? ''))
-    expect(differing.map(([t]) => t).sort()).toEqual(['device:lease-refused', 'device:leased', 'device:shutdown-done', 'device:shutdown-error', 'session:chrome', 'session:deviceInfo'])
+    expect(differing.map(([t]) => t).sort()).toEqual(['device:lease-refused', 'device:leased', 'device:shutdown-done', 'device:shutdown-error', 'session:chrome', 'session:deviceInfo', 'session:stream-refused', 'session:stream-set'])
   })
 })

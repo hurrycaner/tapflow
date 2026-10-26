@@ -143,6 +143,20 @@ MCP를 지원하는 클라이언트라면 모두 tapflow를 사용할 수 있습
 | `list_runs` | `tapflow flow run`이 릴레이에 남긴 실행 기록 목록 조회 (상태·빌드·플로우 이름·CI 여부로 거르기) |
 | `get_run` | 실행 기록 하나 조회. 실패한 플로우의 단계(통과한 플로우는 단계 수)·실패 메시지·플로우 파일 경로와 실패한 플로우의 스크린샷(최대 4장) |
 | `get_testing_guide` | 이 도구들로 모바일 기능을 테스트하는 방법. 다룰 경우, 여기서 테스트할 수 없는 것, 잘못된 버그 판정을 피하는 법, 검증된 경로를 플로우로 남기는 법, 보고 형식 |
+| `start_recording` | 기기 화면을 mp4로 녹화 시작. `connect_device`와 `buildId`가 필요하며 파일은 그 빌드의 Recordings 탭에 남습니다. [화면 녹화하기](#recording) 참고 |
+| `stop_recording` | 녹화를 멈추고 업로드. `waitMs`(기본 30초, 최대 50초)까지 기다리며, 끝나지 않은 업로드는 `pending`으로 돌려줌 |
+| `recording_status` | 녹화 상태 조회. 세그먼트별 업로드 `url`, `pending` 또는 실패 사유. `stop_recording`이 끝난 뒤에도 호출할 수 있음 |
+
+## 화면 녹화하기 {#recording}
+
+에이전트는 시나리오를 진행하는 동안 기기 화면을 녹화할 수 있고, 파일은 사람이 찾아볼 자리에 남습니다. 앱 실행까지는 평소와 같은 순서입니다. `connect_device`, `boot_device`, `install_app`, `launch_app`을 호출한 뒤 `list_builds`에서 얻은 `buildId`로 `start_recording`을 호출하고, 시나리오를 진행한 다음 `stop_recording`을 호출합니다.
+
+- **저장 위치.** 그 빌드의 **Recordings** 탭에 다른 녹화처럼 72시간 동안 남습니다. 긴 녹화는 파일 여러 개로 나뉘고, 파일마다 목록에서 별도의 행이 됩니다. 순서는 `stop_recording` 응답의 `url` 목록으로만 알 수 있습니다.
+- **녹화되는 것.** 에이전트의 스트림이 보내는 기기 화면 그대로입니다. 스트림의 인코딩 단계에 맞춘 H.264이며, LAN 릴레이에서는 긴 변이 1280px입니다(외부 접속은 1000px). `TAPFLOW_IOS_MAX_SIZE=0`이면 원본 크기입니다. 대시보드 녹화에 있는 기기 베젤은 없고 소리도 없습니다.
+- **제한.** 파일 하나가 100MB가 되면 새 파일에서 이어 녹화합니다. 녹화 하나는 전체 500MB에서 멈춥니다. MCP 서버 하나는 한 번에 녹화 하나만 합니다.
+- **멈추기.** `stop_recording`은 업로드를 최대 30초(`waitMs`, 최대 50초) 기다립니다. 끝나지 않은 업로드는 `pending`으로 알려 주고 백그라운드에서 마저 올립니다. 나중에 `recording_status`로 `url`을 확인하세요.
+- **토큰.** 업로드에는 `builds:write`가 필요하며, 서버가 이미 쓰는 API 토큰에 들어 있습니다.
+- **이전 릴레이와 기기.** 릴레이는 `holder-stream`을 알리는 버전이어야 합니다. 이전 버전이면 `start_recording`이 `relay-too-old`로 실패합니다. 이 버전 이전에 부팅한 iOS 시뮬레이터는 아직 JPEG로 스트리밍할 수 있고, 이때 도구가 `jpeg-stream`을 돌려줍니다. `shutdown_device` 후 `boot_device`를 호출하면 H.264로 부팅합니다.
 
 ## 일반적인 워크플로우
 

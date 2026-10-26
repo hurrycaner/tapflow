@@ -4,7 +4,7 @@ import { pipeUpload } from '../lib/uploads.js'
 import path from 'path'
 import { randomUUID } from 'crypto'
 import busboy from 'busboy'
-import { requireAuth, getAuth } from '../middleware/auth.js'
+import { requireAuth, requireBuildAuth, getAuth } from '../middleware/auth.js'
 import { getDb } from '../db.js'
 
 const TTL_MS = 72 * 60 * 60 * 1000
@@ -18,7 +18,10 @@ export function handleUploadRecording(
   res: http.ServerResponse,
   recordingsDir: string,
 ): void {
-  const auth = requireAuth(req, res)
+  // A cookie of any role, as before (a Viewer may record from the dashboard today, and the PAT path is not
+  // stricter for the same action), or a PAT with `builds:write` — the MCP server's upload path.
+  // `assertCanWrite` is deliberately not applied.
+  const auth = requireBuildAuth(req, res)
   if (!auth) return
 
   const u = new URL(req.url ?? '/', 'http://x')

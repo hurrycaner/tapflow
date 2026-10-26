@@ -97,6 +97,8 @@ export const INBOUND_DISPOSITION = {
       + 'nothing else here reads it',
   },
   // A replay engine drives a session; it never watches one, so the four watch replies have no waiter here.
+'session:stream-set': { ignored: 'Answers `session:stream`, which this client never sends.' },
+'session:stream-refused': { ignored: 'Answers `session:stream`, which this client never sends.' },
   'watch:started': { ignored: 'Answers `watch:start`, which this client never sends.' },
   'watch:refused': { ignored: 'Answers `watch:start`, which this client never sends.' },
   'watch:holder-left': { ignored: 'Sent only to a watching socket; this client never watches.' },

@@ -23,7 +23,7 @@ import type {
   StreamRegistered, StreamRequestIdr, UiTreeError, UiTreeRequest, UiTreeResponse,
   NetworkRequestState,
   InputPosture, DevicePostures,
-  WatchStart, WatchStop, WatchStarted, WatchRefused, WatchHolderLeft, WatchEnded, WatchAction, SessionActivity,
+  SessionStream, SessionStreamSet, SessionStreamRefused, WatchStart, WatchStop, WatchStarted, WatchRefused, WatchHolderLeft, WatchEnded, WatchAction, SessionActivity,
 } from './index.js'
 
 // ── must NOT compile ─────────────────────────────────────────────────────────
@@ -218,6 +218,9 @@ export const _ScreenshotError: ScreenshotError['type'] = 'screenshot:error'
 export const _StreamRegister: StreamRegister['type'] = 'stream:register'
 export const _UiTreeResponse: UiTreeResponse['type'] = 'ui:tree:response'
 export const _UiTreeError: UiTreeError['type'] = 'ui:tree:error'
+export const _SessionStream: SessionStream['type'] = 'session:stream'
+export const _SessionStreamSet: SessionStreamSet['type'] = 'session:stream-set'
+export const _SessionStreamRefused: SessionStreamRefused['type'] = 'session:stream-refused'
 export const _WatchStart: WatchStart['type'] = 'watch:start'
 export const _WatchStop: WatchStop['type'] = 'watch:stop'
 export const _WatchStarted: WatchStarted['type'] = 'watch:started'

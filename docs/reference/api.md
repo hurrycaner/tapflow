@@ -15,7 +15,7 @@ Only the endpoints below accept a personal access token (PAT), and they accept t
 
 | PAT scope | Endpoints |
 |-----------|-----------|
-| `builds:write` | `POST /builds`, `GET /builds`, `GET /builds/:id`, `POST /comments`, every webhook endpoint, writing run records (`POST` under `/runs`) |
+| `builds:write` | `POST /builds`, `GET /builds`, `GET /builds/:id`, `POST /comments`, every webhook endpoint, writing run records (`POST` under `/runs`), `POST /recordings/upload` |
 | `view` | `GET /apps`, `GET` under `/runs`, `GET /sessions/:sessionId/screenshot`, `GET /sessions/:sessionId/ui-tree`, files under `/uploads/` (at the relay root, not under `/api/v1/`), device-session WebSockets opened from a remote machine |
 | `agent` | A remote agent's WebSocket connection, accepted only while the member who issued the token is an Admin |
 
@@ -745,6 +745,8 @@ File:
 ### `POST /api/v1/recordings/upload`
 
 Upload a recording file. Automatically deleted **72 hours** after upload.
+
+Auth: a signed-in session cookie (any role), or an API token with `builds:write`.
 
 ```
 Content-Type: multipart/form-data

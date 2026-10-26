@@ -368,6 +368,7 @@ describe('browser-inbound routing matches the protocol union', () => {
       'clipboard:read': 'payload? requestId sessionId',
       'clipboard:write': 'payload requestId sessionId',
       'network:set': 'payload requestId sessionId',
+      'session:stream': 'sessionId stream',
       'watch:start': 'sessionId',
       'watch:stop': 'sessionId',
       // A2: a flow step's name for watchers; unanswered, so an older relay drops it with nothing waiting.
@@ -396,6 +397,8 @@ describe('browser-inbound routing matches the protocol union', () => {
       'session:rebound': 'capabilities sessionId',
       error: 'message reason sessionId',
       'watch:started': 'sessionId',
+      'session:stream-set': 'sessionId stream',
+      'session:stream-refused': 'message reason sessionId',
       'watch:refused': 'message reason sessionId',
       'watch:holder-left': 'sessionId',
       'watch:ended': 'reason sessionId',
