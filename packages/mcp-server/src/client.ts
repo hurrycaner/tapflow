@@ -476,6 +476,8 @@ export class TapflowClient {
   /** The token the current (or last) socket was opened with, so a rotation can be told from the same token again. */
   private connectedWith: string | null = null
   private reconnecting: Promise<void> | null = null
+  /** Rotated-token reconnects that succeeded; a tool wrapper reads the change to resume parked uploads (C15). */
+  reconnects = 0
   /** Sessions joined on this socket. */
   private readonly held = new Set<string>()
   private hooks: RecorderHooks | null = null
@@ -510,6 +512,7 @@ export class TapflowClient {
       this.tokens.refresh()
       if (this.tokens.token === this.connectedWith) return
       await this.connect()
+      this.reconnects++
       for (const id of this.held) this.released.add(id)
       this.held.clear()
     })().finally(() => { this.reconnecting = null })
@@ -827,6 +830,10 @@ export class TapflowClient {
   }
 
   /** What the relay says it understands beyond the base protocol. An older relay omits the list. */
+  async hasFeature(name: string): Promise<boolean> {
+    return (await this.relayFeatures()).includes(name)
+  }
+
   private async relayFeatures(): Promise<string[]> {
     this.send({ type: 'agents:list' })
     const msg = await this.waitFor((m) => m['type'] === 'agents:listed', 5_000)

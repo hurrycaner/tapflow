@@ -6,6 +6,17 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { EnvironmentStepError, isEligible, parseFlow, runFlow, type FlowDriver } from '@tapflowio/flow-runner'
 import { SessionEndedError, SessionLeftError, type TapflowClient } from './client.js'
 import { TESTING_GUIDE } from './guide.js'
+import { createRecording, type RecordingDeps } from './recording/index.js'
+import {
+  AlreadyRecordingError,
+  JpegStreamError,
+  NoKeyframeError,
+  SEGMENT_CAP_BYTES,
+  StoppedBeforeKeyframeError,
+  TOTAL_CAP_BYTES,
+} from './recording/types.js'
+import { StreamRefusedError } from './client.js'
+import { randomUUID } from 'crypto'
 import { compactLaunchOptions, launchOptionsProblem, type LaunchApplied } from '@tapflowio/protocol/launch'
 
 // Input refusal reasons that name the environment rather than the product,
@@ -158,17 +169,28 @@ function err(text: string): ToolResult {
   return { content: [{ type: 'text', text }], isError: true }
 }
 
-export function registerTools(server: McpServer, client: TapflowClient): void {
+export function registerTools(server: McpServer, client: TapflowClient, recordingDeps?: RecordingDeps): void {
+  // Built on first use so tests that never record do not need a recording stack; index.ts passes its own eagerly.
+  let built: RecordingDeps | undefined = recordingDeps
+  const recording = (): RecordingDeps => (built ??= createRecording(client))
+  // A recording this process started is still addressable after stop_recording, and a second stop says so (V18).
+  const stopped = new Set<string>()
+
   // Every tool first gives a rotated token its one reconnect (`reconnectIfRotated`), and a tool aimed at a session
   // the relay released because of it says so instead of failing for a reason it cannot name.
   const register = ((name: string, config: unknown, cb: (...args: unknown[]) => unknown) =>
     server.registerTool(name, config as never, (async (...args: unknown[]) => {
+      const reconnectsBefore = client.reconnects
       await client.reconnectIfRotated().catch(() => { /* the tool reports the closed socket itself */ })
+      // C15: uploads parked on a 401 get one retry once a rotated token has connected.
+      if (client.reconnects !== reconnectsBefore) recording().uploader.resumeParked()
       // Only a tool whose schema has a sessionId gets its input as the first argument; a schema-less one gets the
       // SDK's request context there, whose own `sessionId` is a transport's, not a device's.
       const takesSession = (config as { inputSchema?: Record<string, unknown> }).inputSchema?.['sessionId'] !== undefined
       const sessionId = takesSession ? (args[0] as { sessionId?: unknown } | undefined)?.sessionId : undefined
-      const note = name !== 'connect_device' && typeof sessionId === 'string' ? client.releasedByReconnect(sessionId) : undefined
+      // stop_recording and recording_status must reach their handlers after a release: the recording outlives the hold (C12, V18).
+      const exempt = name === 'connect_device' || name === 'stop_recording' || name === 'recording_status'
+      const note = !exempt && typeof sessionId === 'string' ? client.releasedByReconnect(sessionId) : undefined
       if (note) return err(`${name} failed: ${note}`)
       return cb(...args)
     }) as never)) as McpServer['registerTool']
@@ -179,6 +201,114 @@ export function registerTools(server: McpServer, client: TapflowClient): void {
     'get_testing_guide',
     { description: 'How to test a mobile feature with these tools: cases to cover, what cannot be tested here, how to avoid false bugs, how to save a verified flow, and the report format. Call once before testing.' },
     async () => ok(TESTING_GUIDE),
+  )
+
+  register(
+    'start_recording',
+    {
+      description:
+        'Record the device screen as mp4 from now until stop_recording. Returns after the first keyframe. ' +
+        "Needs connect_device and a buildId (from list_builds): the mp4 lands in that build's Recordings tab in the dashboard. " +
+        "Records the bare screen at the stream's encode tier, no bezel. One recording per MCP server at a time.",
+      inputSchema: {
+        sessionId: z.string().describe('Session to record (from connect_device)'),
+        buildId: z.number().int().describe('Build the recording is filed under (from list_builds)'),
+      },
+    },
+    async ({ sessionId, buildId }) => {
+      const { manager } = recording()
+      // Claimed before any await: two concurrent starts must not both pass the check (V15).
+      let claim: ReturnType<typeof manager.claim>
+      try {
+        claim = manager.claim(sessionId, randomUUID())
+      } catch (e) {
+        if (e instanceof AlreadyRecordingError) {
+          return err(`start_recording failed: already-recording (session ${e.activeSessionId}) — stop_recording it first`)
+        }
+        return err(`start_recording failed: ${(e as Error).message}`)
+      }
+      try {
+        if (!(await client.hasFeature('holder-stream'))) {
+          claim.release()
+          return err('start_recording failed: relay-too-old — this relay does not answer session:stream; update the relay')
+        }
+        if (!client.isHeld(sessionId)) {
+          claim.release()
+          return err('start_recording failed: not-held — call connect_device first')
+        }
+        // An upload that is already doomed must not cost a recording (C7).
+        const build = await client.lookupBuild(buildId)
+        if (build.kind === 'not-found') {
+          claim.release()
+          return err('start_recording failed: build-not-found (see list_builds)')
+        }
+        if (build.kind === 'unknown') {
+          claim.release()
+          return err(`start_recording failed: build-lookup-failed: ${build.reason}`)
+        }
+        const started = await claim.start(buildId)
+        return ok(JSON.stringify({
+          recordingId: claim.recordingId,
+          recording: true,
+          width: started.width,
+          height: started.height,
+          segmentCapBytes: SEGMENT_CAP_BYTES,
+          totalCapBytes: TOTAL_CAP_BYTES,
+          ...(started.previous ? { previous: started.previous } : {}),
+        }))
+      } catch (e) {
+        // A failed start already cleaned up after itself; release is a no-op then and frees the slot otherwise (V8).
+        claim.release()
+        if (e instanceof NoKeyframeError) return err('start_recording failed: no-keyframe — no decodable keyframe arrived in 5 s; is the device booted and streaming?')
+        if (e instanceof JpegStreamError) return err('start_recording failed: jpeg-stream — the device streams JPEG; call shutdown_device then boot_device so it boots with H.264')
+        if (e instanceof StreamRefusedError) return err(`start_recording failed: stream-refused: ${e.reason}`)
+        if (e instanceof StoppedBeforeKeyframeError) return err('start_recording failed: stopped before a keyframe')
+        return err(`start_recording failed: ${(e as Error).message}`)
+      }
+    },
+  )
+
+  register(
+    'stop_recording',
+    {
+      description:
+        'Stop recording and upload. Waits up to waitMs (default 30 s) for uploads; segments still pending are reported and finish in the background — read recording_status later. ' +
+        "A long recording is several files, listed as separate rows in the Recordings tab; the reply's url order is the only grouping.",
+      inputSchema: {
+        sessionId: z.string().describe('Session being recorded'),
+        waitMs: z.number().optional().describe('How long to wait for uploads, default 30000, at most 50000'),
+      },
+    },
+    async ({ sessionId, waitMs }) => {
+      const { manager } = recording()
+      // Measured from the call, so the stop itself spends from the same budget; 50 s stays under a 60 s host timeout (C15).
+      const deadline = Date.now() + Math.min(50_000, Math.max(0, waitMs ?? 30_000))
+      const recorder = manager.recorderFor(sessionId)
+      if (!recorder || stopped.has(recorder.recordingId)) {
+        return err('stop_recording failed: not-recording — nothing is recording on this session (recording_status shows the last result)')
+      }
+      try {
+        stopped.add(recorder.recordingId)
+        await recorder.stop()
+        await manager.awaitUploads(recorder.recordingId, Math.max(0, deadline - Date.now()))
+        return ok(JSON.stringify(manager.status(sessionId, recorder.recordingId)))
+      } catch (e) {
+        return err(`stop_recording failed: ${(e as Error).message}`)
+      }
+    },
+  )
+
+  register(
+    'recording_status',
+    {
+      description:
+        'The state of a recording on this session: segments with their upload url, pending or failure (and the kept tmp path), any time, including after stop_recording returned pending.',
+      inputSchema: {
+        sessionId: z.string().describe('Session to read'),
+        recordingId: z.string().optional().describe('A specific recording; default is the latest on this session'),
+      },
+    },
+    async ({ sessionId, recordingId }) => ok(JSON.stringify(recording().manager.status(sessionId, recordingId) ?? { state: 'idle' })),
   )
 
   register(
