@@ -39,6 +39,9 @@ export const keyFrame = (at = T0, sps = SPS_720P): Buffer =>
 /** A keyframe-flagged IDR with no SPS: scrcpy's periodic one. */
 export const keyNoSps = (at = T0): Buffer =>
   writeEnvelopeHeader(annexb(IDR), at, { codec: CODEC_H264, keyframe: true })
+/** A keyframe-flagged IDR carrying SPS but no PPS: dims parse, but mediabunny's avcC needs both (R8/R11). */
+export const keySpsNoPps = (at = T0, sps = SPS_720P): Buffer =>
+  writeEnvelopeHeader(annexb(sps, IDR), at, { codec: CODEC_H264, keyframe: true })
 export const deltaFrame = (at: number): Buffer =>
   writeEnvelopeHeader(annexb(P), at, { codec: CODEC_H264, keyframe: false })
 export const jpegFrame = (at = T0): Buffer =>

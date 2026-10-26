@@ -14,7 +14,7 @@ import {
 } from '../recording/types'
 import {
   T0, SPS_PORTRAIT, audioFrame, bigKey, deltaFrame, gate, hugeDelta, jpegFrame, keyFrame, keyNoSps,
-  makeHarness, settle, type HarnessOptions,
+  keySpsNoPps, makeHarness, settle, type HarnessOptions,
 } from './recordingFixtures'
 
 beforeEach(() => { vi.useFakeTimers() })
@@ -101,6 +101,20 @@ describe('Recorder start (C4, C6, C8, V19, V27)', () => {
     expect(h.removed).toEqual(['/tmp/tapflow-rec-rec1-0.mp4'])
     expect(h.jobs).toEqual([])
     expect(r.result()).toMatchObject({ state: 'done', segments: [], pending: 0 })
+  })
+
+  it('an IDR carrying SPS but no PPS during priming is not a decodable key: stays priming and times out (C6, V3)', async () => {
+    const h = makeHarness()
+    const r = recorderFor(h)
+    const started = r.start()
+    const rejected = expect(started).rejects.toBeInstanceOf(NoKeyframeError)
+    await settle()
+    r.onFrame(keySpsNoPps(T0 + 66))
+    expect(r.result().state).toBe('priming') // still priming: the gate needs IDR+SPS+PPS, not IDR+SPS
+    await settle(5_000)
+    await rejected
+    expect(togglesFalse(h)).toBe(1)
+    expect(h.jobs).toEqual([])
   })
 
   it('a JPEG frame while priming rejects with JpegStreamError, toggles off and removes the tmp file', async () => {
