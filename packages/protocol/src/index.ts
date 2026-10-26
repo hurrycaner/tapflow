@@ -1820,8 +1820,8 @@ export interface SessionStart {
    *  a session nobody may watch — no inference from the credential, which a new auth method would break.
    *  See `ClientKind`. */
   clientKind?: ClientKind
-  /** `false` from a client that never reads the stream (the MCP server; the flow runner when it is not recording
-   *  video): the relay sends this holder no stream frames, video or audio. Watchers are unaffected. Absent or `true`
+  /** `false` from a client that is not reading the stream (the MCP server outside a recording; the flow runner when it is
+   *  not recording video): the relay sends this holder no stream frames, video or audio. Watchers are unaffected. Absent or `true`
    *  is as before. An older relay drops the key and keeps sending. A holder changes this later with `session:stream`
    *  on a relay that lists `'holder-stream'`. */
   stream?: boolean

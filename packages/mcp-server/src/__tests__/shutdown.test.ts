@@ -50,6 +50,29 @@ describe('installExitDrain', () => {
     expect(t.calls).toEqual(['resumeParked', 'drainForExit(10000)', 'disconnect', 'exit(0)'])
   })
 
+  it('a SIGTERM after a stdin-end drain lets that drain finish and does not exit at once', async () => {
+    const t = setup()
+    t.stdinHandlers.get('end')!()
+    await vi.advanceTimersByTimeAsync(0)
+    t.handlers.get('SIGTERM')!() // a host closes stdin and then signals: not a second Ctrl-C
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.proc.exit).not.toHaveBeenCalled()
+    t.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.calls.at(-1)).toBe('exit(0)')
+    expect(t.log).not.toHaveBeenCalledWith('tapflow-rec: exiting now; uploads not finished')
+  })
+
+  it('a second signal after a signal-started drain exits at once', async () => {
+    const t = setup()
+    t.handlers.get('SIGTERM')!()
+    await vi.advanceTimersByTimeAsync(0)
+    t.handlers.get('SIGTERM')!()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.proc.exit).toHaveBeenCalledWith(0)
+    expect(t.log).toHaveBeenCalledWith('tapflow-rec: exiting now; uploads not finished')
+  })
+
   it('stdin end triggers the drain', async () => {
     const t = setup()
     t.stdinHandlers.get('end')!()

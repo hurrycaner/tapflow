@@ -106,6 +106,26 @@ async function happy(): Promise<Mp4Segment> {
 }
 
 describe('Mp4Segment', () => {
+  it('add reports false once a packet failed to write, without waiting for finalize (V29/V30)', async () => {
+    const seg = await Mp4Segment.open(path)
+    const src = (seg as unknown as { source: { add: (...a: unknown[]) => Promise<void> } }).source
+    const real = src.add.bind(src)
+    let n = 0
+    src.add = async (...a) => {
+      if (++n === 3) throw new Error('ENOSPC')
+      return real(...a)
+    }
+    const results: boolean[] = []
+    results.push(seg.add(key()))
+    for (let i = 1; i <= 6; i++) {
+      await new Promise((r) => setTimeout(r, 5))
+      results.push(seg.add(delta(T0 + i * 33)))
+    }
+    expect(results[0]).toBe(true)
+    expect(results.at(-1)).toBe(false)
+    await seg.finalize().catch(() => undefined)
+  })
+
   it('writes key + 5 deltas: ftyp first, moov after mdat, avc1 1280x720, 6 packets, ~198 ms', async () => {
     const seg = await happy()
     const res = await seg.finalize()

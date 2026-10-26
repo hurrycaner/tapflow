@@ -204,6 +204,21 @@ describe('Recorder frames (V3, V9, V11, C10)', () => {
 })
 
 describe('Recorder rollover and caps (C9, V5, V25)', () => {
+  it('after the rollover buffer overflowed, deltas are not muxed until a key arrives (C13)', async () => {
+    const g = gate()
+    const { h, r } = await primed({ finalizeGate: (i) => (i === 0 ? g : undefined) })
+    r.onFrame(keyFrame(T0 + 66, SPS_PORTRAIT))
+    r.onFrame(hugeDelta()) // far past ROLLOVER_BUFFER_BYTES: dropped, and the stream now has a hole
+    g.open()
+    await settle()
+    expect(h.writers[1]!.adds.map((a) => a.capturedAt)).toEqual([T0 + 66])
+    r.onFrame(deltaFrame(T0 + 200)) // refers to the dropped frame: undecodable
+    expect(h.writers[1]!.adds.map((a) => a.capturedAt)).toEqual([T0 + 66])
+    r.onFrame(keyFrame(T0 + 300, SPS_PORTRAIT))
+    r.onFrame(deltaFrame(T0 + 333))
+    expect(h.writers[1]!.adds.map((a) => a.capturedAt)).toEqual([T0 + 66, T0 + 300, T0 + 333])
+  })
+
   it('a delta that would cross the cap is dropped, enters re-priming and re-sends every 600 ms; the next decodable key opens segment 1', async () => {
     const { h, r } = await primed()
     const before = togglesTrue(h)
@@ -265,6 +280,20 @@ describe('Recorder rollover and caps (C9, V5, V25)', () => {
 })
 
 describe('Recorder write errors (C9, V30)', () => {
+  it('a writer that reports a failed add ends the recording with write-error at once, not at the next finalize', async () => {
+    const { h, r } = await primed({ addFailsAt: (i, n) => i === 0 && n === 2 })
+    r.onFrame(deltaFrame(T0 + 33))
+    await settle()
+    const res = r.result()
+    expect(res.endReason).toBe('write-error')
+    expect(res.state).toBe('done')
+    expect(res.segments).toHaveLength(1)
+    expect(res.segments[0]).toMatchObject({ index: 0, error: 'EIO' })
+    expect(h.jobs).toEqual([])
+    r.onFrame(deltaFrame(T0 + 66))
+    expect(h.writers[0]!.adds).toHaveLength(2) // nothing more is fed to a failed writer
+  })
+
   it('a finalize rejection ends with write-error, marks the segment, enqueues nothing for it and removes its tmp file', async () => {
     const { h, r } = await primed({ finalizeFails: (i) => i === 0 })
     r.onFrame(keyFrame(T0 + 66, SPS_PORTRAIT))

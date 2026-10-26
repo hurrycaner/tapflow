@@ -143,7 +143,7 @@ rather than per tab-storage is a relay implementation decision and lives in
 Correlated by `requestId` today: `screenshot`, `ui:tree`, `clipboard`, the app commands (`open-url`,
 `app:install`, `app:launch`, `app:clear-state`), the device lifecycle (`device:boot`, `device:shutdown` — see
 「Lifecycle correlation」), and **the inputs an ack answers** (see 「Input correlation」). What is left correlates
-by `sessionId` + message type, and the reason a pair is *not* in the set is always one of the two below, or a third class: holder-only idempotent toggles whose only reply echoes the requested value (`watch:start` and `session:stream`). They correlate by `sessionId` + type because two in flight for one session ask for the same thing, and a reply for the other value is told apart by its payload.
+by `sessionId` + message type, and the reason a pair is *not* in the set is always one of the two below, or a third class, the `sessionId`-only pairs: `watch:start`, whose reply is the cached session state and carries no value to correlate, and the holder-only idempotent toggle `session:stream`, whose only reply echoes the requested value. Two toggles in flight for one session ask for the same thing, and a reply for the other value is told apart by its payload.
 
 `#499` was the last of the defects that came from having no correlator, and it was the sharpest: the four pairs
 above arrive at the speed a person clicks a button, while a swipe is dozens of frames, so an ack that missed

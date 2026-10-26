@@ -289,9 +289,16 @@ export function registerTools(server: McpServer, client: TapflowClient, recordin
       }
       try {
         stopped.add(recorder.recordingId)
-        await recorder.stop()
+        // The stop spends from the same budget: finalize plus a 5 s toggle timeout can outlast it, and the reply then
+        // reports the live state (the recording keeps closing in the background).
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const result = await Promise.race([
+          recorder.stop(),
+          new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), Math.max(0, deadline - Date.now())) }),
+        ]).finally(() => clearTimeout(timer))
         await manager.awaitUploads(recorder.recordingId, Math.max(0, deadline - Date.now()))
-        return ok(JSON.stringify(manager.status(sessionId, recorder.recordingId)))
+        // A stop during priming drops the recording from the manager before this line; the stop's own result is the reply.
+        return ok(JSON.stringify(manager.status(sessionId, recorder.recordingId) ?? result ?? recorder.result()))
       } catch (e) {
         return err(`stop_recording failed: ${(e as Error).message}`)
       }

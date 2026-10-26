@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **The recordings upload route accepts an API token with `builds:write`.** It took only a session cookie before. Dashboard behaviour is unchanged, and a Viewer can still record.
-- **The MCP server asks the relay for the video stream only while it records.** It still joins sessions with `stream: false`, as before; a relay without `holder-stream` answers `relay-too-old` to `start_recording`.
+- **The MCP server asks the relay for the video stream only while it records.** It still joins sessions with `stream: false` as before, except on a re-join while a recording is active; a relay without `holder-stream` answers `relay-too-old` to `start_recording`.
 
 ## [0.29.0] - 2026-10-26
 

@@ -27,6 +27,9 @@ export function installExitDrain(deps: ExitDrainDeps): { drain(trigger: DrainTri
 
   let started = false
   let finished = false
+  // A host's normal shutdown is "close stdin, then SIGTERM": the first signal is only "now" when it is itself the
+  // second Ctrl-C, so signals are counted rather than inferred from the drain having started.
+  let signals = 0
 
   const finish = (): void => {
     if (finished) return
@@ -36,9 +39,11 @@ export function installExitDrain(deps: ExitDrainDeps): { drain(trigger: DrainTri
   }
 
   const drain = async (trigger: DrainTrigger): Promise<void> => {
+    const isSignal = trigger === 'SIGINT' || trigger === 'SIGTERM'
+    if (isSignal) signals++
     if (started) {
-      // Ctrl-C twice means now (V22: bounded). Non-signal triggers are echoes of the same exit.
-      if (!finished && (trigger === 'SIGINT' || trigger === 'SIGTERM')) {
+      // A second signal means now (V22: bounded). Non-signal triggers are echoes of the same exit.
+      if (!finished && isSignal && signals >= 2) {
         log('tapflow-rec: exiting now; uploads not finished')
         finished = true
         proc.exit(0)

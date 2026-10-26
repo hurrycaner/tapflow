@@ -97,13 +97,15 @@ export class Mp4Segment {
     return segment
   }
 
-  /** Synchronous and never throws: it runs inside the websocket message handler (V29). */
-  add(frame: FrameInfo): void {
+  /** Synchronous and never throws: it runs inside the websocket message handler (V29). Returns false after a write error. */
+  add(frame: FrameInfo): boolean {
     try {
       this.addUnsafe(frame)
     } catch (e) {
       this.error ??= e
     }
+    // False once any write failed, so the caller can stop feeding a segment that finalize will reject anyway.
+    return this.error === null
   }
 
   private addUnsafe(frame: FrameInfo): void {

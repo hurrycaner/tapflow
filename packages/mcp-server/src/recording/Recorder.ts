@@ -77,6 +77,8 @@ export class Recorder {
   private nextIndex = 0
   private bytesTotal = 0
   private toggled = false
+  /** True from the first stream:true until stream:false has settled (or none was ever sent). */
+  private streamOn = false
   private writeFailed = false
   private closed = false
 
@@ -125,6 +127,11 @@ export class Recorder {
     return ACTIVE.has(this.phase)
   }
 
+  /** The relay's per-session stream flag is off again: only then may another recorder claim the frame slot. */
+  get streamOff(): boolean {
+    return !this.streamOn
+  }
+
   result(): RecordingResult {
     return {
       recordingId: this.recordingId,
@@ -161,11 +168,15 @@ export class Recorder {
     this.current = seg
 
     this.toggled = true
+    this.streamOn = true
     try {
       await this.client.setStream(this.sessionId, true)
     } catch (e) {
       // A refusal means the relay did not turn the stream on; anything else (timeout) is ambiguous.
-      if (e instanceof StreamRefusedError) this.toggled = false
+      if (e instanceof StreamRefusedError) {
+        this.toggled = false
+        this.streamOn = false
+      }
       await this.teardownPriming(undefined)
       throw e
     }
@@ -280,6 +291,11 @@ export class Recorder {
   private onRecordingFrame(f: FrameInfo): void {
     const cur = this.current
     if (!cur) return
+    // C13: after a rollover-buffer overflow a delta would reference a frame that was dropped; wait for a key.
+    if (this.gap) {
+      if (!(f.keyframe || f.decodableKey)) return
+      this.gap = false
+    }
     const len = f.payload.length
     // C9 (c), checked before the per-segment cap: the ceiling ends the recording, a rollover would not.
     if (this.bytesTotal + len > TOTAL_CAP_BYTES) {
@@ -306,9 +322,11 @@ export class Recorder {
   }
 
   private mux(cur: Current, f: FrameInfo): void {
-    cur.writer.add(f)
+    const ok = cur.writer.add(f)
     cur.bytesMuxed += f.payload.length
     this.bytesTotal += f.payload.length
+    // A failed write ends the recording now; finalize reports the error on the segment (V30).
+    if (!ok) void this.close('write-error')
   }
 
   /** Detaches the current segment and starts its finalize; a failure ends the recording (C9, V30). */
@@ -497,12 +515,17 @@ export class Recorder {
 
   /** V1: stream:false only while held, and only if this recorder turned it on. */
   private async toggleOff(): Promise<void> {
-    if (!this.toggled || !this.client.isHeld(this.sessionId)) return
+    if (!this.toggled || !this.client.isHeld(this.sessionId)) {
+      this.streamOn = false
+      return
+    }
     this.toggled = false
     try {
       await this.client.setStream(this.sessionId, false)
     } catch (e) {
       this.note(e)
+    } finally {
+      this.streamOn = false
     }
   }
 

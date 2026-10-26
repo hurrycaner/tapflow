@@ -3,6 +3,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { registerTools } from '../tools.js'
 import { StreamRefusedError, type TapflowClient } from '../client.js'
 import { createRecording, type RecordingDeps } from '../recording/index.js'
+import { RecordingManager } from '../recording/RecordingManager.js'
+import { T0, gate, keyFrame, makeHarness, type HarnessOptions } from './recordingFixtures.js'
 import {
   AlreadyRecordingError,
   JpegStreamError,
@@ -209,5 +211,56 @@ describe('createRecording', () => {
     const client = { setRecorderHooks, tokens: { token: 't', refresh: vi.fn() }, httpBase: () => 'http://relay' }
     const { manager } = createRecording(client as unknown as TapflowClient)
     expect(setRecorderHooks).toHaveBeenCalledWith(manager)
+  })
+})
+
+describe('stop_recording against a real manager', () => {
+  async function realRig(opts: HarnessOptions = {}) {
+    const h = makeHarness(opts)
+    const manager = new RecordingManager({
+      client: h.client, openSegment: h.openSegment, tmpDir: '/tmp', lane: h.lane, removeFile: h.removeFile, stderr: () => {},
+    })
+    const client = {
+      reconnectIfRotated: vi.fn(async () => {}),
+      releasedByReconnect: vi.fn(() => undefined),
+      reconnects: 0,
+      hasFeature: vi.fn(async () => true),
+      isHeld: vi.fn(() => true),
+      lookupBuild: vi.fn(async () => ({ kind: 'found', bundleId: 'a.b' })),
+    }
+    const handlers = new Map<string, Handler>()
+    const server = { registerTool: (n: string, _c: unknown, hd: Handler) => { handlers.set(n, hd) } }
+    registerTools(server as unknown as McpServer, client as unknown as TapflowClient, { manager, uploader: { resumeParked: vi.fn() } } as unknown as RecordingDeps)
+    return { h, manager, handlers }
+  }
+
+  it('a stop during priming replies with the result, never the text "null"', async () => {
+    const x = await realRig()
+    const started = x.handlers.get('start_recording')!({ sessionId: 's1', buildId: 7 })
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    expect(x.h.client.setStream).toHaveBeenCalledWith('s1', true)
+    const stopped = await x.handlers.get('stop_recording')!({ sessionId: 's1' })
+    await started
+    expect(text(stopped)).not.toBe('null')
+    expect(JSON.parse(text(stopped))).toMatchObject({ segments: [], endReason: 'stopped' })
+  })
+
+  it('a stop whose finalize outlasts waitMs replies at the deadline with the live state', async () => {
+    vi.useFakeTimers()
+    const g = gate()
+    const x = await realRig({ finalizeGate: () => g })
+    const started = x.handlers.get('start_recording')!({ sessionId: 's1', buildId: 7 })
+    await vi.advanceTimersByTimeAsync(0)
+    x.manager.onBinary(keyFrame(T0))
+    await started
+    let reply: ToolResult | undefined
+    void x.handlers.get('stop_recording')!({ sessionId: 's1', waitMs: 1_000 }).then((r) => { reply = r })
+    for (let i = 0; i < 3; i++) await vi.advanceTimersByTimeAsync(0) // let the handler get past the wrapper and start its deadline timer
+    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(10) // awaitUploads' zero budget is its own timer
+    expect(reply).toBeDefined()
+    expect(JSON.parse(text(reply!))).toMatchObject({ state: 'uploading' })
+    g.open()
+    await vi.advanceTimersByTimeAsync(0)
   })
 })

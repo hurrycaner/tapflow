@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { RecordingManager } from '../recording/RecordingManager'
 import { AlreadyRecordingError, StoppedBeforeKeyframeError } from '../recording/types'
-import { T0, deltaFrame, keyFrame, makeHarness, settle, type HarnessOptions } from './recordingFixtures'
+import { T0, deltaFrame, gate, keyFrame, makeHarness, settle, type HarnessOptions } from './recordingFixtures'
 
 beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
@@ -29,6 +29,39 @@ async function startPrimed(x: M, sessionId: string, recordingId: string) {
 const togglesTrue = (x: M) => x.h.client.setStream.mock.calls.filter((c) => c[1] === true).length
 
 describe('RecordingManager slot (C11, V8, V15)', () => {
+  it('previous reflects the prior recording as it is when the new one has started, not when start was called', async () => {
+    const x = managerFor()
+    const a = await startPrimed(x, 'sA', 'recA')
+    await a.recorder.stop()
+    await settle()
+    expect(x.m.status('sA', 'recA')?.pending).toBe(1)
+    const b = x.m.start({ sessionId: 'sA', buildId: 7, recordingId: 'recB' })
+    await settle()
+    x.m.setUploadState('recA', 0, { state: 'done', url: 'http://relay/r/0' }) // the upload lands while B primes
+    x.m.onBinary(keyFrame(T0))
+    expect((await b).previous).toBeUndefined()
+  })
+
+  it('keeps the slot until the old recorder has turned its stream off, so the next start cannot prime on its frames', async () => {
+    const g = gate()
+    const x = managerFor({ finalizeGate: (i) => (i === 0 ? g : undefined) })
+    const a = await startPrimed(x, 'sA', 'recA')
+    const stopA = a.recorder.stop()
+    await settle()
+    // A is finalizing and has not sent stream:false yet: a start now would be primed by A's frames, or have its
+    // stream:true undone by A's trailing stream:false.
+    await expect(x.m.start({ sessionId: 'sA', buildId: 7, recordingId: 'recB' })).rejects.toBeInstanceOf(AlreadyRecordingError)
+    expect(togglesTrue(x)).toBe(1)
+    g.open()
+    await stopA
+    await settle()
+    const b = x.m.start({ sessionId: 'sA', buildId: 7, recordingId: 'recB' })
+    await settle()
+    x.m.onBinary(keyFrame(T0))
+    await b
+    expect(x.h.client.setStream.mock.calls.map((c) => c[1])).toEqual([true, false, true])
+  })
+
   it('two concurrent starts → one AlreadyRecordingError naming the other session and recordingId', async () => {
     const x = managerFor()
     const a = x.m.start({ sessionId: 'sA', buildId: 1, recordingId: 'recA' })

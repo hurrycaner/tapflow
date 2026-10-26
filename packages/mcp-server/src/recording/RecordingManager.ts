@@ -80,8 +80,9 @@ export class RecordingManager implements RecorderHooks {
   }
 
   activeRecorder(): Recorder | null {
-    const s = this.busySlot()
-    return s?.recorder ?? null
+    const rec = this.busySlot()?.recorder ?? null
+    // A recorder that is only waiting for its stream to switch off holds the slot but takes no frames.
+    return rec?.isActive() ? rec : null
   }
 
   /** The recorder a stop_recording should address: the session's active one, else its latest. */
@@ -158,8 +159,6 @@ export class RecordingManager implements RecorderHooks {
   private async run(slot: Slot, buildId: number): Promise<StartResult> {
     const { sessionId, recordingId } = slot
     const priorId = this.latestBySession.get(sessionId)
-    const prior = priorId ? this.recorders.get(priorId) : undefined
-    const priorResult = prior?.result()
     const recorder = new Recorder({
       recordingId,
       sessionId,
@@ -176,6 +175,8 @@ export class RecordingManager implements RecorderHooks {
     try {
       const dims = await recorder.start()
       // V18: a prior result with pending > 0 stays and is named; one without is released now that it is not latest.
+      // Read now, not before priming: an upload may have finished (or the result been dropped) in the meantime.
+      const priorResult = priorId ? this.recorders.get(priorId)?.result() : undefined
       if (priorId) this.maybeDrop(priorId)
       return {
         recorder,
@@ -197,8 +198,8 @@ export class RecordingManager implements RecorderHooks {
   private busySlot(): Slot | null {
     const s = this.slot
     if (!s) return null
-    if (s.recorder === null || s.recorder.isActive()) return s
-    this.slot = null // finalizing frees the frame slot (C11)
+    if (s.recorder === null || s.recorder.isActive() || !s.recorder.streamOff) return s
+    this.slot = null // the slot frees once the old stream is off, not when finalize starts (C11)
     return null
   }
 

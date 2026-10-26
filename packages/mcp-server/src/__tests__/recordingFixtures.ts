@@ -93,6 +93,8 @@ export interface HarnessOptions {
   finalizeFails?: (index: number) => boolean
   /** Finalize of this segment index waits for the gate. */
   finalizeGate?: (index: number) => Gate | undefined
+  /** The nth (1-based) add on this segment index reports a write failure, as a real writer does once it hit one. */
+  addFailsAt?: (index: number, nth: number) => boolean
   held?: boolean
 }
 
@@ -122,6 +124,7 @@ export function makeHarness(opts: HarnessOptions = {}) {
     log.push(`open:${index}`)
     if (opts.openFails?.(index)) throw new Error(`EACCES: ${path}`)
     const adds: FrameInfo[] = []
+    let failed = false
     const w: FakeWriter = {
       path,
       index,
@@ -129,10 +132,13 @@ export function makeHarness(opts: HarnessOptions = {}) {
       add: (f: FrameInfo) => {
         adds.push(f)
         log.push(`add:${index}`)
+        if (opts.addFailsAt?.(index, adds.length)) failed = true
+        return !failed
       },
       finalize: vi.fn(async (): Promise<SegmentResult> => {
         log.push(`finalize:${index}`)
         await opts.finalizeGate?.(index)?.promise
+        if (failed) throw new Error('EIO')
         if (opts.finalizeFails?.(index)) throw new Error('ENOSPC')
         return { path, bytes: 1000 + index, durationMs: 500, width: 1280, height: 720, packets: adds.length, dropped: 0 }
       }),
