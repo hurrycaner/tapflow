@@ -24,6 +24,8 @@ When something refuses or is unsure:
 
 Flows: once a scenario is verified, write it as YAML and replay it with run_flow (selectors by id, then label; wait with assertVisible, never coordinates or sleeps). Keep a flow only after it replays passing. run_flow resets nothing beyond the flow's own clearState.
 
+Recordings: start_recording before a scenario, stop_recording after; stop may answer with uploads pending — read recording_status later; the mp4 lands in the build's Recordings tab.
+
 Report only what you ran and observed. A case you did not run is untested, not passed.`
 
 export const TESTING_GUIDE = `# Testing a mobile screen with tapflow
@@ -67,6 +69,7 @@ Goal: find real defects in the requested feature, prove each with evidence, and 
 - With the keyboard up, are the focused field and the submit button visible? Screenshot.
 - Every button and input has a meaningful label or placeholder. An icon button with an empty or file-name label is a finding. Key controls without an identifier make flows fragile: note them.
 - Overlapping or clipped text: report only when clearly visible.
+- A defect that only shows over time (an animation, flicker, a transition), or a person who asked for a video: record it. start_recording before the scenario, stop_recording after, and hand them the url(s).
 
 ## 3. Not testable here: list, never attempt
 Rotation, dark mode, font size, locale and RTL, network loss or throttling, push notifications, calls, location, paste and autofill, long-press, multi-touch, granting or revoking permissions outside the app, performance, contrast, screen-reader order. If the feature depends on one, write "untested: <item> (no tool)". Never describe how it behaves.
