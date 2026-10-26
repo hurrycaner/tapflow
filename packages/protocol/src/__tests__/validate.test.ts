@@ -97,6 +97,20 @@ describe('an empty correlator is not a correlator', () => {
   })
 })
 
+describe('session:stream', () => {
+  it('accepts stream: true', () => {
+    expect(ok({ type: 'session:stream', sessionId: 's', stream: true }).msg).toEqual({ type: 'session:stream', sessionId: 's', stream: true })
+  })
+
+  it('rejects a non-boolean stream', () => {
+    expect(fail({ type: 'session:stream', sessionId: 's', stream: 'yes' }).reason).toBe('bad-shape')
+  })
+
+  it('rejects a missing sessionId', () => {
+    expect(fail({ type: 'session:stream', stream: true }).reason).toBe('bad-shape')
+  })
+})
+
 describe('an agent older than a field still registers', () => {
   // `AgentRegister` declares `capabilities` and `devices` required, and an agent that predates either
   // sends neither — which is how a viewer tells them apart. The relay carried `msg.capabilities ?? []`

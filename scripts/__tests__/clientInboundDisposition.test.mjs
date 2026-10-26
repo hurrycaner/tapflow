@@ -118,7 +118,8 @@ describe('both clients declare what they do with every browser-inbound message',
         // 32 by the next count, 36 once the four `watch:*` replies arrived, 37 with `watch:action` (A2), and 38 with
         // `device:boot-waiting` (L2, the relay holding a person's boot behind another on the same Mac). 40 with the lease
         // pair (S5).
-        expect(table.size).toBe(40)
+        // 42 with `session:stream-set` / `session:stream-refused` (the holder-stream pair, T1).
+        expect(table.size).toBe(42)
       })
 
       it('every entry is exactly one of settles / does / ignored', () => {

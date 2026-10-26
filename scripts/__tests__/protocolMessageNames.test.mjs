@@ -177,8 +177,9 @@ describe('protocol message interfaces', () => {
     // watching, read-only, the device an AI client is driving. 80 is A2's pair: `WatchAction`, what the holder
     // just did, and `SessionActivity`, the holder's own name for it. 81 is `DeviceBootWaiting` (L2): the relay telling
     // a person their boot is held behind another on the same Mac. 84 is the lease trio (S5): `DeviceLease`, a flow
-    // runner asking the relay to choose a device, and its two answers.
-    expect(messages.size).toBe(84)
+    // runner asking the relay to choose a device, and its two answers. 87 is the holder-stream trio (T1): `SessionStream`,
+    // a holder turning its device stream on/off mid-session, and its ack and refusal.
+    expect(messages.size).toBe(87)
     // `InputKey` predates L1 and has always been named; it must be in here too.
     expect(messages.has('InputKey')).toBe(true)
   })
@@ -290,7 +291,8 @@ describe('protocol message interfaces', () => {
     }
     expect(offenders).toEqual([])
     // 12 with `watch:refused`. The other three `watch:*` replies are not failures and carry `sessionId` directly.
-    expect([...messages].filter(([, m]) => m.extends === 'SessionScoped')).toHaveLength(12)
+    // 13 with `session:stream-refused`, the refusal half of the holder-stream pair (T1).
+    expect([...messages].filter(([, m]) => m.extends === 'SessionScoped')).toHaveLength(13)
     // `error` is the ninth, as of L5d. Pinned by name rather than only by the count, because the count alone
     // would be satisfied by any new member and this is the one whose membership was argued.
     expect(messages.get('GenericError')).toMatchObject({ literal: 'error', extends: 'SessionScoped' })

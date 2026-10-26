@@ -62,7 +62,7 @@ import type {
   InputPinchEnd, InputPinchMove, InputPinchStart, InputPosture, InputRotate, InputTouchEnd, InputTouchMove,
   InputTouchStart, InputType, InputTypeDone, InputTypeError, KeyboardToggled, OpenUrl, OpenUrlDone,
   OpenUrlError, ScreenshotDone, ScreenshotError, SessionChrome, SessionDeviceInfo, SessionEnd,
-  SessionActivity, SessionLeave, SessionStart, StreamRegister, UiTreeError, UiTreeResponse, WatchStart, WatchStop,
+  SessionActivity, SessionLeave, SessionStart, SessionStream, StreamRegister, UiTreeError, UiTreeResponse, WatchStart, WatchStop,
 } from '../index.js'
 import type { Assert, EnvelopeOf, IsEmpty, SchemaExact } from './assert.js'
 
@@ -132,6 +132,7 @@ const BROWSER_INBOUND = {
     // Same reasoning as `clientKind`: a value this relay does not know drops the field, never the join.
     stream: z.union([z.boolean(), z.unknown().transform(() => undefined)]).optional(),
   }),
+  'session:stream': z.object({ type: z.literal('session:stream'), sessionId, stream: z.boolean() }),
   'watch:start': z.object({ type: z.literal('watch:start'), sessionId }),
   'watch:stop': z.object({ type: z.literal('watch:stop'), sessionId }),
   // Capped here as well as cut by the clients: an over-long frame is dropped whole, never answered.
@@ -602,6 +603,7 @@ type _InputKeyboardToggle = Assert<V<'input:keyboard:toggle', InputKeyboardToggl
 type _ClipboardRead = Assert<V<'clipboard:read', ClipboardRead>>
 type _ClipboardWrite = Assert<V<'clipboard:write', ClipboardWrite>>
 type _NetworkSet = Assert<V<'network:set', NetworkSet>>
+type _SessionStream = Assert<V<'session:stream', SessionStream>>
 type _WatchStart = Assert<V<'watch:start', WatchStart>>
 type _WatchStop = Assert<V<'watch:stop', WatchStop>>
 type _SessionActivity = Assert<V<'session:activity', SessionActivity>>
