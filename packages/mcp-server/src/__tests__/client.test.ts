@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { IncomingMessage } from 'node:http'
 import { WebSocketServer, WebSocket } from 'ws'
-import { TapflowClient, REASON_ADVICE, SessionEndedError, SessionLeftError, reasonAdvice } from '../client.js'
+import { TapflowClient, REASON_ADVICE, SessionEndedError, SessionLeftError, StreamRefusedError, reasonAdvice } from '../client.js'
+import type { RecorderHooks } from '../client.js'
 import { makeFlowDriver } from '../tools.js'
 import { EnvironmentStepError, TransientQueryError, isEnvironmentStepFailure } from '@tapflowio/flow-runner'
 
@@ -1770,5 +1771,150 @@ describe('disconnect_device settles what was waiting on the session (#514)', () 
     // them — a leave that never left would otherwise take the waiters of a session it never left.
     expect(() => client.disconnectDevice('sess-1')).toThrow(/not connected/i)
     expect(await boot).toBe('rejected')
+  })
+
+})
+
+describe('recorder support', () => {
+  let relay: ReturnType<typeof createMockRelay>
+  let client: TapflowClient
+
+  beforeEach(async () => {
+    relay = createMockRelay()
+    client = new TapflowClient(`ws://localhost:${relay.port}`, 'tflw_pat_test')
+    await client.connect()
+  })
+
+  afterEach(async () => { client.disconnect(); await relay.close() })
+
+  const tick = () => new Promise((r) => setTimeout(r, 50))
+  const hooksOf = (over: Partial<RecorderHooks> = {}): RecorderHooks => ({
+    isActive: () => false,
+    onBinary: vi.fn(),
+    onJoined: vi.fn(),
+    onTerminated: vi.fn(),
+    onClose: vi.fn(),
+    ...over,
+  })
+  const join = async (id = 'sess-1') => {
+    setTimeout(() => relay.send({ type: 'session:joined', sessionId: id }), 10)
+    await client.connectDevice(id)
+  }
+
+  it('setStream resolves on session:stream-set with the same sessionId and value', async () => {
+    const p = client.setStream('sess-1', true)
+    const sent = await waitForMessage(relay, 'session:stream')
+    expect(sent).toMatchObject({ sessionId: 'sess-1', stream: true })
+    relay.send({ type: 'session:stream-set', sessionId: 'sess-1', stream: true })
+    await expect(p).resolves.toBeUndefined()
+  })
+
+  it('setStream is not settled by a stream-set for the other value', async () => {
+    let settled = false
+    const p = client.setStream('sess-1', true).then(() => { settled = true })
+    await waitForMessage(relay, 'session:stream')
+    relay.send({ type: 'session:stream-set', sessionId: 'sess-1', stream: false })
+    await tick()
+    expect(settled).toBe(false)
+    relay.send({ type: 'session:stream-set', sessionId: 'sess-1', stream: true })
+    await p
+    expect(settled).toBe(true)
+  })
+
+  it('setStream rejects with StreamRefusedError carrying the reason', async () => {
+    const p = client.setStream('sess-1', true)
+    await waitForMessage(relay, 'session:stream')
+    relay.send({ type: 'session:stream-refused', sessionId: 'sess-1', reason: 'not-session-owner', message: 'not yours' })
+    const err = await p.catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(StreamRefusedError)
+    expect(err).toMatchObject({ sessionId: 'sess-1', reason: 'not-session-owner', message: 'not yours' })
+  })
+
+  it('isHeld is false before connectDevice, true after session:joined, false after disconnectDevice', async () => {
+    expect(client.isHeld('sess-1')).toBe(false)
+    await join()
+    expect(client.isHeld('sess-1')).toBe(true)
+    client.disconnectDevice('sess-1')
+    expect(client.isHeld('sess-1')).toBe(false)
+  })
+
+  it('connectDevice sends stream:false with no hooks', async () => {
+    await join()
+    expect(relay.sentMessages().find((m) => m['type'] === 'session:start')).toMatchObject({ stream: false })
+  })
+
+  it('connectDevice omits the stream key while a recorder is active for the session', async () => {
+    client.setRecorderHooks(hooksOf({ isActive: (id) => id === 'sess-1' }))
+    await join()
+    const start = relay.sentMessages().find((m) => m['type'] === 'session:start')!
+    expect(start).toMatchObject({ sessionId: 'sess-1', clientKind: 'mcp' })
+    expect('stream' in start).toBe(false)
+  })
+
+  it('bootDevice sends acceptH264: true', async () => {
+    setTimeout(() => relay.send({ type: 'device:ready', sessionId: 'sess-1' }), 10)
+    await client.bootDevice('sess-1', 'dev-1')
+    const boot = await waitForMessage(relay, 'device:boot')
+    expect(boot).toMatchObject({ payload: { deviceId: 'dev-1', acceptH264: true } })
+  })
+
+  it('hands a binary frame to onBinary with the same bytes, and survives a throwing onBinary', async () => {
+    const frames: Buffer[] = []
+    let first = true
+    client.setRecorderHooks(hooksOf({
+      onBinary: (f) => {
+        frames.push(Buffer.from(f))
+        if (first) { first = false; throw new Error('listener bug') }
+      },
+    }))
+    await tick() // the relay's side of the connection must exist before it can push
+    const bytes = Buffer.from([0, 0, 0, 1, 0x65, 9, 8, 7])
+    relay.lastClient().send(bytes, { binary: true })
+    await tick()
+    expect(frames).toHaveLength(1)
+    expect(frames[0]!.equals(bytes)).toBe(true)
+    // The throw above must not have taken the socket or the dispatcher down.
+    setTimeout(() => relay.send({ type: 'agents:listed', sessions: [] }), 10)
+    await expect(client.listDevices()).resolves.toEqual([])
+  })
+
+  it('tells the hooks about session:joined and session:terminated', async () => {
+    const hooks = hooksOf()
+    client.setRecorderHooks(hooks)
+    await join()
+    expect(hooks.onJoined).toHaveBeenCalledWith('sess-1')
+    relay.send({ type: 'session:terminated', sessionId: 'sess-1', reason: 'agent-disconnected' })
+    await tick()
+    expect(hooks.onTerminated).toHaveBeenCalledWith('sess-1', 'agent-disconnected')
+  })
+
+  it('runs onClose before a pending waiter rejects on socket close', async () => {
+    // A rejection is observed a microtask later, so the order of two synchronous steps cannot be read from
+    // a `.catch`. Settling a waiter clears its deadline timer first, which is synchronous and can be seen:
+    // note the waiter's 5s timer when it is created, and ask in `onClose` whether it has been cleared yet.
+    const created: unknown[] = []
+    const realSet = globalThis.setTimeout
+    const set = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => {
+      const t = realSet(fn, ms)
+      if (ms === 5_000) created.push(t)
+      return t
+    }) as typeof setTimeout)
+    const clear = vi.spyOn(globalThis, 'clearTimeout')
+    let clearedAtClose: boolean | null = null
+    const order: string[] = []
+    client.setRecorderHooks(hooksOf({
+      onClose: () => {
+        order.push('onClose')
+        clearedAtClose = clear.mock.calls.some(([t]) => created.includes(t))
+      },
+    }))
+    const pending = client.listDevices().catch(() => { order.push('rejected') })
+    await waitForMessage(relay, 'agents:list')
+    relay.lastClient().close()
+    await pending
+    set.mockRestore()
+    clear.mockRestore()
+    expect(order).toEqual(['onClose', 'rejected'])
+    expect(clearedAtClose).toBe(false)
   })
 })

@@ -110,8 +110,8 @@ export const INBOUND_DISPOSITION = {
       + 'reader in the repo is flow-runner, which copies it into a run\'s video (A4).',
   },
   // This client drives a session; it never watches one, so the four watch replies have no waiter here.
-'session:stream-set': { ignored: 'Answers `session:stream`; consumed by `setStream` once the recorder lands (T3).' },
-'session:stream-refused': { ignored: 'Answers `session:stream`; consumed by `setStream` once the recorder lands (T3).' },
+  'session:stream-set': { settles: 'setStream' },
+  'session:stream-refused': { settles: 'setStream' },
   'watch:started': { ignored: 'Answers `watch:start`, which this client never sends.' },
   'watch:refused': { ignored: 'Answers `watch:start`, which this client never sends.' },
   'watch:holder-left': { ignored: 'Sent only to a watching socket; this client never watches.' },

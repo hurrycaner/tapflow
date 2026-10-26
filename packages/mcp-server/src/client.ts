@@ -206,6 +206,33 @@ const BOOT_REFUSALS: Record<BootRefusalReason, string> = {
 export class SessionLeftError extends Error {}
 
 /**
+ * The relay refused a `session:stream` toggle: the session is not there, or this socket does not hold it.
+ * The reason is the relay's closed vocabulary, kept as a field so a caller branches on it rather than on prose.
+ */
+export class StreamRefusedError extends Error {
+  constructor(readonly sessionId: string, readonly reason: string, message: string) {
+    super(message)
+  }
+}
+
+/**
+ * What a recorder needs from the socket this client owns.
+ *
+ * The client, not the recorder, owns the socket: a process opens one `ws` to the relay, and a second one
+ * would be a second owner key, so the recorder is a listener on this one. One holder of hooks per client.
+ * Every hook runs synchronously inside the socket's event handlers and a throw from one is swallowed, so a
+ * recorder bug cannot take down the connection every tool shares.
+ */
+export interface RecorderHooks {
+  isActive(sessionId: string): boolean
+  onBinary(frame: Buffer): void
+  /** A (re-)join resets the relay's per-session stream flag, so an active recorder must re-send its toggle. */
+  onJoined(sessionId: string): void
+  onTerminated(sessionId: string, reason: string): void
+  onClose(): void
+}
+
+/**
  * The relay said this session ended while a request was still in flight (#512, finding 4).
  *
  * Its own class because it carries a certainty a timeout does not. `Request timed out` says no reply
@@ -451,6 +478,15 @@ export class TapflowClient {
   private reconnecting: Promise<void> | null = null
   /** Sessions joined on this socket. */
   private readonly held = new Set<string>()
+  private hooks: RecorderHooks | null = null
+
+  setRecorderHooks(hooks: RecorderHooks | null): void {
+    this.hooks = hooks
+  }
+
+  isHeld(sessionId: string): boolean {
+    return this.held.has(sessionId)
+  }
   /** Sessions held on a socket a reconnect replaced: the relay released them when that socket closed. */
   private readonly released = new Set<string>()
 
@@ -525,7 +561,10 @@ export class TapflowClient {
       })
       ws.once('error', reject)
       ws.on('message', (data, isBinary) => {
-        if (isBinary) return
+        if (isBinary) {
+          try { this.hooks?.onBinary(data as Buffer) } catch { /* a listener's throw must not take the socket down */ }
+          return
+        }
         try {
           const msg = JSON.parse((data as Buffer).toString()) as RelayMsg
           this.dispatch(msg)
@@ -535,6 +574,9 @@ export class TapflowClient {
         // `disconnect()` lets go of the socket first, so a close this client asked for is not recorded.
         if (this.ws === ws) this.lastClose = { code, reason: reason.toString() }
         this.ws = null
+        // Before the waiters, not after: a recorder must cut its file short while nothing has yet reported
+        // the loss, because a rejected waiter wakes a tool that may ask the recorder what it holds.
+        try { this.hooks?.onClose() } catch { /* a listener's throw must not stop the waiters settling */ }
         const detail = this.closeDetail()
         const closed = `WebSocket closed${detail}`
         const pending = this.waiters.splice(0)
@@ -691,6 +733,7 @@ export class TapflowClient {
           s.away = false
           s.terminated = reason
           this.rejectSession(lifecycleSession, reason)
+          try { this.hooks?.onTerminated(lifecycleSession, reason) } catch { /* a listener's throw must not break dispatch */ }
           break
         }
         case 'session:joined': {
@@ -707,6 +750,8 @@ export class TapflowClient {
           // session, so a join naming that id is refused rather than joined.
           const s = this.lifecycle.get(lifecycleSession)
           if (s) s.away = false
+          // The relay resets its stream flag on a join; the recorder re-sends its toggle, this only tells it.
+          try { this.hooks?.onJoined(lifecycleSession) } catch { /* a listener's throw must not break dispatch */ }
           break
         }
         default:
@@ -797,8 +842,12 @@ export class TapflowClient {
 
   /** @returns where a person can watch this session in the dashboard — see `watchUrlFor`. */
   async connectDevice(sessionId: string): Promise<{ watchUrl: string }> {
-    // Nothing here reads the stream (binary is dropped on arrival; screenshots are REST), so the relay sends none.
-    this.send({ type: 'session:start', sessionId, clientKind: 'mcp', stream: false })
+    // The stream is read only while a recorder is active for this session (binary is otherwise dropped on
+    // arrival; screenshots are REST), so the relay sends none. `session:stream` changes that later; absent
+    // `stream` means it streams, per the protocol.
+    this.send(this.hooks?.isActive(sessionId)
+      ? { type: 'session:start', sessionId, clientKind: 'mcp' }
+      : { type: 'session:start', sessionId, clientKind: 'mcp', stream: false })
     const msg = await this.waitFor(
       (m) =>
         (m['type'] === 'session:joined' && m['sessionId'] === sessionId) ||
@@ -841,6 +890,26 @@ export class TapflowClient {
       throw new Error(ended ? `${detail} — the relay ended this session (${ended})` : detail)
     }
     return { watchUrl: this.watchUrlFor(sessionId, msg['watchUrl']) }
+  }
+
+  /** Turns this socket's video stream for a session on or off, once the relay confirms the new value. */
+  async setStream(sessionId: string, stream: boolean): Promise<void> {
+    this.send({ type: 'session:stream', sessionId, stream })
+    const msg = await this.waitFor(
+      (m) =>
+        m['sessionId'] === sessionId &&
+        // `=== stream`: a reply for the other value belongs to an earlier toggle still in flight (on then off
+        // in quick succession), and settling on it would report a state the relay has since left.
+        ((m['type'] === 'session:stream-set' && m['stream'] === stream) || m['type'] === 'session:stream-refused'),
+      5_000,
+      sessionId,
+    )
+    if (msg['type'] === 'session:stream-refused') {
+      const reason = typeof msg['reason'] === 'string' ? msg['reason'] : 'unknown'
+      const message = typeof msg['message'] === 'string' ? msg['message'] : 'stream refused'
+      const note = this.sessionNote(sessionId)
+      throw new StreamRefusedError(sessionId, reason, note ? `${message} — ${note}` : message)
+    }
   }
 
   /**
@@ -891,7 +960,9 @@ export class TapflowClient {
   // thing between `boot_device` and its full deadline. See 「Lifecycle correlation」 in protocol/AGENTS.md.
   async bootDevice(sessionId: string, deviceId: string): Promise<void> {
     const requestId = randomUUID()
-    this.send({ type: 'device:boot', sessionId, requestId, payload: { deviceId } })
+    // iOS picks its codec per boot: JPEG unless the viewer says it can decode H.264. The recorder needs H.264,
+    // and H.264 is what every dashboard session already gets.
+    this.send({ type: 'device:boot', sessionId, requestId, payload: { deviceId, acceptH264: true } })
     const msg = await this.waitFor(
       (m) =>
         (m['type'] === 'device:ready' || m['type'] === 'device:boot-error') &&
