@@ -201,6 +201,37 @@ describe('lifecycle correlation (device:boot / device:shutdown)', () => {
     agent.close(); browser.close()
   })
 
+  // A deep link can start the app before any `app:launch`, so `open-url` carries the flag as well.
+  it.each([
+    ['mcp', true],
+    ['dashboard', false],
+  ] as const)('tags an open-url by a %s holder automation=%s', async (clientKind, expected) => {
+    const { agent, sessionId } = await registerAgent('booted')
+    const holder = new WebSocket(`ws://localhost:${port}`)
+    await waitForOpen(holder)
+    holder.send(JSON.stringify({ type: 'session:start', sessionId, clientKind }))
+    await waitForType(holder, 'session:joined')
+
+    const forwarded = waitForType<{ type: string; payload: Record<string, unknown> }>(agent, 'open-url')
+    holder.send(JSON.stringify({ type: 'open-url', sessionId, requestId: 'rq-url', payload: { url: 'myapp://x' } }))
+
+    expect((await forwarded).payload).toMatchObject({ url: 'myapp://x', automation: expected })
+
+    agent.close(); holder.close()
+  })
+
+  it('overwrites an automation flag a browser sent on an open-url', async () => {
+    const { agent, sessionId } = await registerAgent('booted')
+    const browser = await joinAs(sessionId)
+
+    const forwarded = waitForType<{ type: string; payload: Record<string, unknown> }>(agent, 'open-url')
+    browser.send(JSON.stringify({ type: 'open-url', sessionId, requestId: 'rq-forged-url', payload: { url: 'myapp://x', automation: true } }))
+
+    expect((await forwarded).payload).toMatchObject({ automation: false })
+
+    agent.close(); browser.close()
+  })
+
   it('carries the correlator through on a shutdown a browser asked for', async () => {
     const { agent, sessionId } = await registerAgent()
     const browser = await joinAs(sessionId)

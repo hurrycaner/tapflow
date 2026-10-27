@@ -1969,6 +1969,9 @@ export class RelayServer {
         // error. Neither exists any more.
         const target = this.dispatchTarget(ws, msg.sessionId)
         if (target.ok) {
+          // Stamped for the reason `handleBrowserAppLaunch` gives: a deep link can be the first thing that starts the
+          // app on a device a dashboard left armed. Set from the session's holder, overwriting anything sent.
+          ;(msg.payload as Record<string, unknown>)['automation'] = isAiClientKind(target.session.holderKind)
           target.session.agentSocket.send(JSON.stringify(msg))
           // No URL: a deep link can carry a token, and watchers are the whole team.
           this.tellWatchersAction(msg.sessionId, { kind: 'open-url' })

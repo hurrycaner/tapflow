@@ -114,8 +114,8 @@ iOS build format: `.app.zip` **or** `.tar.gz`/`.tgz` (EAS `eas build` simulator 
   (#542). Splitting the resolver rather than inlining two checks is what makes closing #527 a one-line
   move to `dispatchTarget`; the cost, written down rather than waved past, is that a non-owner now learns
   whether a session id exists — small against being able to shut that device down, which it still can.
-  `app:launch` is stamped `automation` from the holder's kind the same way a boot is (`isAiClientKind`): the iOS
-  agent disarms its network hook for automation launches, and an MCP client on an already-booted device never boots.
+  `app:launch` and `open-url` are stamped `automation` from the holder's kind the same way a boot is (`isAiClientKind`): the iOS
+  agent disarms its network hook for automation launches and deep links, and an MCP client on an already-booted device never boots.
   The app-command handlers check ownership **after** the session lookup and **before** the build lookup,
   deliberately not through `dispatchTarget`: that resolver also decides agent liveness, and using it there
   would move `agent offline` ahead of `Build not found`, changing which of two simultaneous problems the

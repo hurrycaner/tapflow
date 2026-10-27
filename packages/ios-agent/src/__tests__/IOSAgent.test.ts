@@ -849,6 +849,52 @@ describe('IOSAgent', () => {
       browser.close()
     })
 
+    const openUrlAs = async (simctl: SimctlWrapper, clientKind: string) => {
+      const { agent, browser } = await bootAs(simctl, clientKind)
+      await boot(browser, agent, 'rq-boot')
+      const unsetsAfterBoot = (simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mock.calls.length
+      browser.send(JSON.stringify({ type: 'open-url', requestId: 'rq-url', sessionId: agent.sessionId, payload: { url: 'myapp://x' } }))
+      const reply = await waitForType(browser, 'open-url:done')
+      return { agent, browser, unsetsAfterBoot, reply }
+    }
+
+    it('an mcp holder\'s open-url unsets DYLD_INSERT_LIBRARIES before simctl openurl', async () => {
+      const simctl = mockSimctl(true)
+      const { agent, browser, reply } = await openUrlAs(simctl, 'mcp')
+
+      expect(reply.requestId).toBe('rq-url')
+      const unset = simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>
+      expect(unset).toHaveBeenCalledWith('dev-1', DYLD)
+      expect(unset.mock.invocationCallOrder.at(-1)!).toBeLessThan((simctl.openUrl as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!)
+
+      agent.disconnect()
+      browser.close()
+    })
+
+    it('a dashboard holder\'s open-url does not unset DYLD_INSERT_LIBRARIES', async () => {
+      const simctl = mockSimctl(true)
+      const { agent, browser, unsetsAfterBoot } = await openUrlAs(simctl, 'dashboard')
+
+      expect((simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(unsetsAfterBoot)
+      expect(simctl.openUrl).toHaveBeenCalled()
+
+      agent.disconnect()
+      browser.close()
+    })
+
+    it('an open-url still opens and answers open-url:done when the unset fails, and warns', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const simctl = mockSimctl(true)
+      ;(simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('spawn failed'))
+      const { agent, browser } = await openUrlAs(simctl, 'mcp')
+
+      expect(simctl.openUrl).toHaveBeenCalled()
+      expect(warn.mock.calls.filter((c) => String(c.join(' ')).includes('before open-url'))).toHaveLength(1)
+
+      agent.disconnect()
+      browser.close()
+    })
+
     it('an automation boot still answers device:ready when unsetting DYLD_INSERT_LIBRARIES fails, and warns once', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const simctl = mockSimctl(true)

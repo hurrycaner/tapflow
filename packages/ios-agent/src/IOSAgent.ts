@@ -297,7 +297,7 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
     }
     this.simctl = simctl ?? new SimctlWrapper()
     // **Never the real filter under vitest.** Layer 1 is a system extension installed on the
-    // developer's Mac, and `arm()` runs on every boot — so a suite that booted a mock device was
+    // developer's Mac, and `arm()` or `disarm()` runs on every boot, both rewriting the host rule — so a suite that booted a mock device was
     // launching the notarized container app and rewriting the host's live filter configuration, once
     // per boot test, on any machine where tapflow's own filter is installed. Nothing in the suite
     // said so, because the class reports a missing container app rather than failing.
@@ -1704,7 +1704,15 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
           respond({ type: 'open-url:error', message: 'no booted device' })
           break
         }
-        this.simctl.openUrl(state.deviceId, url)
+        // A deep link can be the first thing that starts the app on a device a dashboard left armed, so an
+        // automation holder disarms here as `app:launch` does.
+        const automation = (msg.payload as { automation?: boolean }).automation === true
+        const unhook = automation
+          ? this.network.disarm(state.deviceId)
+              .catch((e: unknown) => logger.warn('could not disarm the network injection before open-url:', (e as Error).message))
+          : Promise.resolve()
+        unhook
+          .then(() => this.simctl.openUrl(state.deviceId, url))
           .then(() => respond({ type: 'open-url:done' }))
           .catch((e: unknown) => {
             const message = e instanceof Error ? e.message : String(e)
@@ -2134,8 +2142,8 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
    *
    * `deviceStates` holds one entry per *registered* simulator, not per running one, so this used to
    * answer for a device that was shut down — or never booted. The network path is where that costs
-   * something: a toggle after a shutdown writes the kernel rule for a dead udid, and `arm()` is the
-   * only thing that clears it, which now happens on the *next* boot of that device. Until then the
+   * something: a toggle after a shutdown writes the kernel rule for a dead udid, and `arm()` and
+   * `disarm()` are the only things that clear it, which now happens on the *next* boot of that device. Until then the
    * host is dropping flows for nothing, and a simulator that reuses the udid comes up offline.
    *
    * **`booted` alone is not the check, and reading it as one is a regression this shipped once.**
