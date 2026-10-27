@@ -814,11 +814,14 @@ describe('IOSAgent', () => {
 
     it('an mcp holder\'s app:launch unsets DYLD_INSERT_LIBRARIES before simctl launch', async () => {
       const simctl = mockSimctl(true)
-      const { agent, browser } = await launchAs(simctl, 'mcp')
+      const { agent, browser, unsetsAfterBoot } = await launchAs(simctl, 'mcp')
 
+      // Counted from after the boot: the boot of an mcp holder unsets too, so comparing the last unset to the
+      // launch would pass with no launch-time disarm at all (a mutation that dropped it survived that shape).
       const unset = simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>
-      expect(unset).toHaveBeenCalledWith('dev-1', DYLD)
-      expect(unset.mock.invocationCallOrder.at(-1)!).toBeLessThan((simctl.launchApp as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!)
+      expect(unset.mock.calls.length).toBeGreaterThan(unsetsAfterBoot)
+      expect(unset.mock.calls[unsetsAfterBoot]).toEqual(['dev-1', DYLD])
+      expect(unset.mock.invocationCallOrder[unsetsAfterBoot]!).toBeLessThan((simctl.launchApp as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!)
 
       agent.disconnect()
       browser.close()
@@ -860,12 +863,14 @@ describe('IOSAgent', () => {
 
     it('an mcp holder\'s open-url unsets DYLD_INSERT_LIBRARIES before simctl openurl', async () => {
       const simctl = mockSimctl(true)
-      const { agent, browser, reply } = await openUrlAs(simctl, 'mcp')
+      const { agent, browser, reply, unsetsAfterBoot } = await openUrlAs(simctl, 'mcp')
 
       expect(reply.requestId).toBe('rq-url')
+      // Counted from after the boot, for the reason the launch test gives.
       const unset = simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>
-      expect(unset).toHaveBeenCalledWith('dev-1', DYLD)
-      expect(unset.mock.invocationCallOrder.at(-1)!).toBeLessThan((simctl.openUrl as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!)
+      expect(unset.mock.calls.length).toBeGreaterThan(unsetsAfterBoot)
+      expect(unset.mock.calls[unsetsAfterBoot]).toEqual(['dev-1', DYLD])
+      expect(unset.mock.invocationCallOrder[unsetsAfterBoot]!).toBeLessThan((simctl.openUrl as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!)
 
       agent.disconnect()
       browser.close()
