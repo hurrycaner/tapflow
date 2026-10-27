@@ -617,10 +617,13 @@ So a session the relay stamps `automation` (MCP server, flow runner — on `devi
 it, at boot **and again before each launch**: an MCP client joining a device that is already booted never
 boots it, so a boot-only disarm would leave the variable set. Dashboard sessions still arm at boot.
 
-Two consequences. `network:state` on an automation session reports `available: false, reason:
-'not-armed'`, so the offline toggle a watcher sees is unavailable. And a dashboard user who launches on
-a still-booted device right after an automation session gets an unhooked app until the next dashboard
-boot, because nothing re-arms at launch.
+Two consequences. `network:state` on an automation session answers `available: false, reason:
+'not-armed'`, and nothing reads it there: the watch page mounts no toolbar and the MCP server lists
+`network:state` as ignored. A dashboard session that follows re-arms before it can launch: the dashboard
+sends `device:boot` on every `session:joined` (`DeviceViewer.sendBoot`), and the agent arms on a boot of
+a device that is already up. The gap runs the other way: an automation session that joins a device a
+dashboard left armed is disarmed by its first `app:launch` or `open-url`, so an app it starts by tapping
+the icon before either of those runs hooked.
 
 Arming is not removed outright because manual QA's offline toggle needs layer 2 for fidelity: with the
 kernel filter alone the app still believes it is online (measured above).
@@ -770,7 +773,7 @@ every `device:ready`, every capability `networkState()` — so it **remembers** 
 that memory one re-join repaints a Mac that cannot take devices offline as a healthy one, and the
 tester's toast is the only trace left that anything went wrong.
 
-`awaiting-app` is not an edge case: it is the state every iOS session is in between the device
+`awaiting-app` is not an edge case: it is the state every dashboard iOS session is in between the device
 booting and its app launching, because the library is armed at boot and can only name its target at
 launch.
 
@@ -844,7 +847,7 @@ already done, so the dashboard interrupts rather than re-colours.
   `soleLiveDeviceId` / `soleLiveDeviceState`; both ask simctl before believing a device is down (#646).
   `stream()` is the one left on the cache, because it cannot await without changing `DeviceAgent` —
   the comment on `soleDeviceState` says what that costs.
-- **Tests must never reach the real filter.** `arm()` runs on every boot, so a suite that boots a
+- **Tests must never reach the real filter.** `arm()` runs on every dashboard boot and `disarm()` on every automation boot, both rewrite the host filter rule, so a suite that boots a
   mock device was rewriting the host's live filter configuration once per boot test on any machine
   with tapflow's extension installed — silently, because the class *reports* a missing container app
   rather than failing. `IOSAgent` points its `SimulatorNetwork` at a nonexistent host binary under

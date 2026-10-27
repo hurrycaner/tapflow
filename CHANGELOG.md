@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Apps an MCP client or a flow launches on iOS run without tapflow's network hook.** Identity-verification and bank-linking SDKs such as Plaid and Pinwheel treat the injected library as tampering and showed a blank screen; they now render normally and the UI tree lists their elements. The dashboard's offline toggle is unavailable on those sessions, and dashboard sessions are unchanged. A person who launches on a device right after an automation session, without rebooting it, gets an app without the hook until the next dashboard boot.
+- **Apps an MCP client or a flow launches on iOS run without tapflow's network hook.** Identity-verification and bank-linking SDKs such as Plaid and Pinwheel treat the injected library as tampering and showed a blank screen; they now render normally and the UI tree lists their elements. The dashboard's offline toggle is unavailable on those sessions, and dashboard sessions are unchanged.
 
 ## [0.30.0] - 2026-10-27
 

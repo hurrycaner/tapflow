@@ -849,7 +849,8 @@ export class SimulatorNetwork {
     // the device as armed whatever the file's state — it sets the environment and does not read the
     // path it sets — so the branch below fell to `awaiting-app`: "launch an app through tapflow", to
     // a tester who has already launched one, for the life of the session. (`not-armed` and its
-    // reboot only appear when this process restarted, since `armed` is its memory.)
+    // reboot appear when this process restarted, since `armed` is its memory, and on an automation
+    // session, which disarms on purpose.)
     //
     // Read rather than remembered, unlike layer 1 above. Layer 1 is a question this synchronous
     // method cannot put to the provider; this one is a `stat`, and a `node_modules` emptied under a
@@ -861,7 +862,7 @@ export class SimulatorNetwork {
     // The three answers differ by what the tester has to do, which is what the reason set is for.
     // An absent verdict means two different things and they were reported as one: nothing was
     // delivered (reboot), or it was delivered and no app has exercised it yet (launch one). The
-    // second is what every iOS session looks like before its app starts, so folding it into
+    // second is what every dashboard iOS session looks like before its app starts, so folding it into
     // `not-armed` put the wrong remedy on the common case.
     if (verdict === 'missing') {
       if (!this.armed.has(udid)) return { offline, available: false, reason: 'not-armed' }
@@ -1260,7 +1261,7 @@ export class SimulatorNetwork {
    *
    * This used to write `[...this.offline]` — the whole set — and the host replaced the rule with it.
    * The rule is host-wide, so that made every run an assertion about devices this agent had never
-   * heard of: a second agent starting knows of no offline device, and `arm()` runs on every device
+   * heard of: a second agent starting knows of no offline device, and `arm()` or `disarm()` runs on every device
    * boot, so **starting one put every device the other had taken offline back online**, silently,
    * while its tester watched an offline control over working traffic.
    *
