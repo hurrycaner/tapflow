@@ -459,6 +459,7 @@ export interface AppInstallToAgent {
   }
 }
 
+// The relay also adds `automation: boolean` to the payload; undeclared on purpose, see the note above `DeviceBoot`.
 export interface AppLaunchToAgent {
   type: 'app:launch'
   sessionId: string
@@ -1868,6 +1869,7 @@ export interface SessionLeave {
 
 // `external` and `automation` are added by the relay on the way through — the browser never sets them.
 // Undeclared on purpose: the parser strips both from what a browser sends, and the relay sets them after it.
+// `app:launch` carries the same relay-added `automation` (see `AppLaunchToAgent`), for the same reason.
 export interface DeviceBoot {
   type: 'device:boot'
   sessionId: string

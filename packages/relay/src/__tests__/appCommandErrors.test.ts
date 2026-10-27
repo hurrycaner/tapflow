@@ -352,7 +352,7 @@ describe('app command failures reach the caller (#445)', () => {
     expect((forwarded.payload as { bundleId: string }).bundleId).toBe('com.example.demo')
     expect(forwarded.requestId).toBe('rq-11')
     // No options asked for, none invented: an agent of any version reads this payload as it always did.
-    expect(forwarded.payload).toEqual({ bundleId: 'com.example.demo' })
+    expect(forwarded.payload).toEqual({ bundleId: 'com.example.demo', automation: false })
 
     agent.close(); browser.close()
   })
@@ -365,7 +365,7 @@ describe('app command failures reach the caller (#445)', () => {
     browser.send(JSON.stringify({ type: 'app:launch', requestId: 'rq-12', sessionId, buildId, arguments: { FIRDebugEnabled: true }, env: { API_HOST: 'x' } }))
     const forwarded = await waitForType(agent, 'app:launch')
 
-    expect(forwarded.payload).toEqual({ bundleId: 'com.example.demo', arguments: { FIRDebugEnabled: true }, env: { API_HOST: 'x' } })
+    expect(forwarded.payload).toEqual({ bundleId: 'com.example.demo', arguments: { FIRDebugEnabled: true }, env: { API_HOST: 'x' }, automation: false })
 
     agent.close(); browser.close()
   })
@@ -415,28 +415,28 @@ describe('app command failures reach the caller (#445)', () => {
 
     it('sends them on a plain launch, marked as defaults only', async () => {
       const { agent, browser } = await launch(['launch-options', 'launch-env'])
-      expect((await waitForType(agent, 'app:launch')).payload).toEqual({ bundleId: 'com.example.defaults', ...DEFAULTS, defaultsOnly: true })
+      expect((await waitForType(agent, 'app:launch')).payload).toEqual({ bundleId: 'com.example.defaults', ...DEFAULTS, defaultsOnly: true, automation: false })
       agent.close(); browser.close()
     })
 
     it('merges the caller\'s options per key, the caller winning, and is no longer defaults only', async () => {
       const { agent, browser } = await launch(['launch-options', 'launch-env'], { arguments: { b: 3 }, env: { X: '1' } })
       expect((await waitForType(agent, 'app:launch')).payload).toEqual({
-        bundleId: 'com.example.defaults', arguments: { a: 1, b: 3 }, env: { LOG_LEVEL: 'debug', X: '1' },
+        bundleId: 'com.example.defaults', arguments: { a: 1, b: 3 }, env: { LOG_LEVEL: 'debug', X: '1' }, automation: false,
       })
       agent.close(); browser.close()
     })
 
     it('leaves env defaults out for an agent that cannot set an app\'s environment', async () => {
       const { agent, browser } = await launch(['launch-options'])
-      expect((await waitForType(agent, 'app:launch')).payload).toEqual({ bundleId: 'com.example.defaults', arguments: DEFAULTS.arguments, defaultsOnly: true })
+      expect((await waitForType(agent, 'app:launch')).payload).toEqual({ bundleId: 'com.example.defaults', arguments: DEFAULTS.arguments, defaultsOnly: true, automation: false })
       agent.close(); browser.close()
     })
 
     // Refusing would fail every dashboard Launch of the app on that Mac until it is updated.
     it('launches plainly on an agent that predates options, instead of refusing', async () => {
       const { agent, browser } = await launch(undefined)
-      expect((await waitForType(agent, 'app:launch')).payload).toEqual({ bundleId: 'com.example.defaults' })
+      expect((await waitForType(agent, 'app:launch')).payload).toEqual({ bundleId: 'com.example.defaults', automation: false })
       agent.close(); browser.close()
     })
 

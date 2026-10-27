@@ -4,9 +4,9 @@ import os from 'os'
 import path from 'path'
 import { WebSocket } from 'ws'
 import { RelayServer } from '../RelayServer'
-import { initDb, closeDb } from '../db'
+import { initDb, closeDb, getDb } from '../db'
 import { barrier, waitForOpen, waitForType, waitForTypeOrNull } from '@tapflowio/test-utils'
-import type { AgentRegistered, DeviceBoot, DeviceBootError, DeviceReady, DeviceShutdown, DeviceShutdownDone } from '@tapflowio/protocol'
+import type { AgentRegistered, AppLaunchToAgent, DeviceBoot, DeviceBootError, DeviceReady, DeviceShutdown, DeviceShutdownDone } from '@tapflowio/protocol'
 
 // L5b′. `device:boot` / `device:shutdown` correlate by `requestId`, and unlike the app commands the
 // correlator on every reply is **optional** — `device:ready`, `device:boot-error` and
@@ -148,6 +148,53 @@ describe('lifecycle correlation (device:boot / device:shutdown)', () => {
 
     const forwarded = waitForType<DeviceBoot>(agent, 'device:boot')
     browser.send(JSON.stringify({ type: 'device:boot', sessionId, requestId: 'rq-forged', payload: { deviceId: 'devA', automation: true } }))
+
+    expect((await forwarded).payload).toMatchObject({ automation: false })
+
+    agent.close(); browser.close()
+  })
+
+  function insertBuild(): number {
+    const db = getDb()
+    const key = `com.example.launch${Math.abs(Number(process.hrtime.bigint() % 1000000n))}`
+    db.prepare(`INSERT INTO apps (name, bundle_id_key, platform) VALUES ('Demo', ?, 'ios')`).run(key)
+    const app = db.prepare('SELECT id FROM apps WHERE bundle_id_key = ?').get(key) as { id: number }
+    const r = db.prepare(`INSERT INTO builds (app_id, version_name, build_number, bundle_id, file_path) VALUES (?, '1.0.0', '1', ?, '/tmp/x.app')`)
+      .run(app.id, key)
+    return Number(r.lastInsertRowid)
+  }
+
+  // The iOS agent disarms its network hook for an automation launch. An automation client on an already-booted
+  // device never boots, so `app:launch` has to carry the flag too.
+  it.each([
+    ['flow-runner', true],
+    ['mcp', true],
+    ['dashboard', false],
+    [undefined, false],
+  ] as const)('tags a launch by a %s holder automation=%s', async (clientKind, expected) => {
+    const { agent, sessionId } = await registerAgent('booted')
+    const holder = new WebSocket(`ws://localhost:${port}`)
+    await waitForOpen(holder)
+    holder.send(JSON.stringify({ type: 'session:start', sessionId, ...(clientKind ? { clientKind } : {}) }))
+    await waitForType(holder, 'session:joined')
+
+    const forwarded = waitForType<AppLaunchToAgent>(agent, 'app:launch')
+    holder.send(JSON.stringify({ type: 'app:launch', sessionId, requestId: 'rq-launch', buildId: insertBuild() }))
+
+    expect((await forwarded).payload).toMatchObject({ automation: expected })
+
+    agent.close(); holder.close()
+  })
+
+  it('overwrites an automation flag a browser sent on a launch', async () => {
+    const { agent, sessionId } = await registerAgent('booted')
+    const browser = await joinAs(sessionId)
+
+    const forwarded = waitForType<AppLaunchToAgent>(agent, 'app:launch')
+    browser.send(JSON.stringify({
+      type: 'app:launch', sessionId, requestId: 'rq-forged-launch', buildId: insertBuild(),
+      automation: true, payload: { automation: true },
+    }))
 
     expect((await forwarded).payload).toMatchObject({ automation: false })
 

@@ -9,7 +9,7 @@ import { SessionManager, isAiClientKind } from './SessionManager.js'
 import type { Session } from './SessionManager.js'
 import type { AgentResources } from './types.js'
 import type { DeviceDetails, UIElement } from './types.js'
-import type { AdmissionRefusal, BootRefusalReason, ChromePayload, LeaseRefusalReason, InputErrorReason, MacAdmission, RelayOutbound, PosturesPayload, WatchActionKind, WatchRefusal } from '@tapflowio/protocol'
+import type { AdmissionRefusal, AppLaunchToAgent, BootRefusalReason, ChromePayload, LeaseRefusalReason, InputErrorReason, MacAdmission, RelayOutbound, PosturesPayload, WatchActionKind, WatchRefusal } from '@tapflowio/protocol'
 import { gestureAction, keyForWatchers } from './lib/watchActions.js'
 import { HostBootGate, GATE_DEFAULTS, type BooterClass, type Effect, type GateEvent, type GateTiming } from './admission/HostBootGate.js'
 import { defaultCap, idleToFree, planCapacity, type CapacityDevice, type CapacityPlan } from './admission/capacity.js'
@@ -3550,11 +3550,18 @@ export class RelayServer {
 
     // See `handleBrowserAppInstall` — the correlator rides across the rebuild, and only a test says the
     // value is the request's.
+    const payload: AppLaunchToAgent['payload'] = { bundleId: build.bundle_id, ...options, ...(merged.defaultsOnly ? { defaultsOnly: true } : {}) }
+    // The iOS agent disarms its network hook for an automation launch, because SDK integrity checks read
+    // DYLD_INSERT_LIBRARIES as tampering. Stamped here and not only on boot: an automation client on an
+    // already-booted device never boots, it just launches. Only the holder passes `ownsSession`, so the holder's
+    // kind is the launcher's. Set from the session, never read from the frame, and undeclared on
+    // `AppLaunchToAgent` like on `DeviceBoot`.
+    Object.assign(payload, { automation: isAiClientKind(session.holderKind) })
     this.sendTo(session.agentSocket, {
       type: 'app:launch',
       sessionId,
       requestId,
-      payload: { bundleId: build.bundle_id, ...options, ...(merged.defaultsOnly ? { defaultsOnly: true } : {}) },
+      payload,
     })
     this.tellWatchersAction(sessionId, { kind: 'launch' })
   }
