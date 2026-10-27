@@ -1421,7 +1421,16 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
         // The target is named BEFORE the launch, and the order is the whole point: dyld reads the
         // environment when the process starts, so naming it afterwards arms the next launch and leaves
         // this one unhooked while `available` would still say true.
-        this.network.target(launchState.deviceId, bundleId)
+        // An automation holder that joined a device already booted never sent `device:boot`, so the boot-time
+        // disarm never ran for it. Done here, before the target and the launch: SDK integrity checks read
+        // DYLD_INSERT_LIBRARIES as tampering, and dyld reads it when the process starts.
+        const automation = (msg.payload as { automation?: boolean }).automation === true
+        const unhook = automation
+          ? this.network.disarm(launchState.deviceId)
+              .catch((e: unknown) => logger.warn('could not disarm the network injection before launch:', (e as Error).message))
+          : Promise.resolve()
+        unhook
+          .then(() => this.network.target(launchState.deviceId, bundleId))
           .catch((e: unknown) => logger.warn('could not name the network target:', (e as Error).message))
           .then(() => this.simctl.launchApp(launchState.deviceId, bundleId, options))
           .then((pid) => {

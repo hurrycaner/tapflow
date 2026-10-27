@@ -798,6 +798,57 @@ describe('IOSAgent', () => {
       dashboard.close()
     })
 
+    // The join-then-launch path: a holder that finds the device already booted never sends `device:boot`.
+    const launchAs = async (simctl: SimctlWrapper, clientKind: string) => {
+      const { agent, browser } = await bootAs(simctl, clientKind)
+      await boot(browser, agent, 'rq-boot')
+      const unsetsAfterBoot = (simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mock.calls.length
+      // The relay resolves the bundle id from a stored build, so the launch needs a row to point at.
+      const db = getDb()
+      const appId = Number(db.prepare("INSERT INTO apps (name, bundle_id_key, platform) VALUES ('Unhook', ?, 'ios')").run(`com.example.unhook${Date.now()}${Math.random()}`).lastInsertRowid)
+      const buildId = Number(db.prepare("INSERT INTO builds (app_id, version_name, build_number, bundle_id, file_path) VALUES (?, '1.0.0', '1', 'com.example.app', '/tmp/x.zip')").run(appId).lastInsertRowid)
+      browser.send(JSON.stringify({ type: 'app:launch', requestId: 'rq-launch', sessionId: agent.sessionId, buildId }))
+      await waitForType(browser, 'app:launch-done')
+      return { agent, browser, unsetsAfterBoot }
+    }
+
+    it('an mcp holder\'s app:launch unsets DYLD_INSERT_LIBRARIES before simctl launch', async () => {
+      const simctl = mockSimctl(true)
+      const { agent, browser } = await launchAs(simctl, 'mcp')
+
+      const unset = simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>
+      expect(unset).toHaveBeenCalledWith('dev-1', DYLD)
+      expect(unset.mock.invocationCallOrder.at(-1)!).toBeLessThan((simctl.launchApp as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!)
+
+      agent.disconnect()
+      browser.close()
+    })
+
+    it('a dashboard holder\'s app:launch does not unset DYLD_INSERT_LIBRARIES', async () => {
+      const simctl = mockSimctl(true)
+      const { agent, browser, unsetsAfterBoot } = await launchAs(simctl, 'dashboard')
+
+      expect((simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(unsetsAfterBoot)
+      expect(simctl.launchApp).toHaveBeenCalled()
+
+      agent.disconnect()
+      browser.close()
+    })
+
+    it('an app:launch still launches and answers app:launch-done when the unset fails, and warns', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const simctl = mockSimctl(true)
+      ;(simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('spawn failed'))
+      const { agent, browser } = await launchAs(simctl, 'mcp')
+
+      expect(simctl.launchApp).toHaveBeenCalled()
+      // One from the boot disarm, one from the launch one: both name the same failure.
+      expect(warn.mock.calls.filter((c) => String(c.join(' ')).includes('could not disarm the network injection before launch'))).toHaveLength(1)
+
+      agent.disconnect()
+      browser.close()
+    })
+
     it('an automation boot still answers device:ready when unsetting DYLD_INSERT_LIBRARIES fails, and warns once', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const simctl = mockSimctl(true)
