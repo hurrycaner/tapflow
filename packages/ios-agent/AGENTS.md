@@ -604,6 +604,27 @@ DoH shares 443 and could not. Neither is there because nothing has measured whet
 host is configured for either actually uses it, and widening the hole on a guess is the failure mode
 this file keeps recording.
 
+#### Automation sessions are never hooked
+
+Layer 2 is a `DYLD_INSERT_LIBRARIES` set simulator-wide at boot, so it lands in every app, and SDKs with
+integrity checks read that variable as a hooking framework. Measured with Plaid and Pinwheel on
+2026-10-27 in a SoLo build: with the library armed the WebView rendered blank and the UI tree showed
+only scroll bars; with the variable cleared, the same flow rendered Plaid's Identity Verification screen
+and the tree listed its elements. An agent cannot test a screen it cannot see.
+
+So a session the relay stamps `automation` (MCP server, flow runner — on `device:boot` and on
+`app:launch`) runs `launchctl unsetenv DYLD_INSERT_LIBRARIES` where a dashboard session would `setenv`
+it, at boot **and again before each launch**: an MCP client joining a device that is already booted never
+boots it, so a boot-only disarm would leave the variable set. Dashboard sessions still arm at boot.
+
+Two consequences. `network:state` on an automation session reports `available: false, reason:
+'not-armed'`, so the offline toggle a watcher sees is unavailable. And a dashboard user who launches on
+a still-booted device right after an automation session gets an unhooked app until the next dashboard
+boot, because nothing re-arms at launch.
+
+Arming is not removed outright because manual QA's offline toggle needs layer 2 for fidelity: with the
+kernel filter alone the app still believes it is online (measured above).
+
 #### The host cannot revoke a connection it allowed
 
 `handleNewFlow`'s `.drop()` reaches new flows only, and `URLSession` keeps one connection for a whole

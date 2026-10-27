@@ -11,6 +11,8 @@ Install the network extension that iOS network control needs on the agent Mac, a
 
 Network control on an iOS simulator needs the tapflow network extension installed on the agent Mac. **It comes with tapflow, so there is nothing to download.** One command installs the copy already in the package.
 
+Sessions driven by the MCP server or the flow runner skip the injected network hook and report `not-armed`, so the offline toggle is unavailable on them.
+
 ### 1. Install it
 
 On a Mac you are setting up for the first time, the iOS setup covers the extension too.
