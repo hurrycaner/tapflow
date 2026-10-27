@@ -1,9 +1,15 @@
 import { describe, it, expect, vi } from 'vitest'
-vi.mock('node:child_process', () => ({ execFileSync: vi.fn() }))
-import { execFileSync } from 'node:child_process'
+vi.mock('node:child_process', () => ({ execFile: vi.fn() }))
+import { execFile } from 'node:child_process'
 import { parseAudioFrames, AudioCaptureStreamer, applyGain, readSimVolume } from '../AudioCaptureStreamer'
 import net from 'node:net'
-const mockExecFileSync = vi.mocked(execFileSync)
+const mockExecFile = vi.mocked(execFile)
+/** plutil answers `out`, or fails with `err`. */
+const plutil = (out: string, err: Error | null = null) => {
+  mockExecFile.mockImplementation(((_cmd: string, _args: string[], _opts: unknown, cb: (e: Error | null, out: string) => void) => {
+    cb(err, out)
+  }) as never)
+}
 
 // Build a length-prefixed frame: [u32 BE len][payload].
 function frame(payload: Buffer): Buffer {
@@ -79,28 +85,30 @@ describe('applyGain (S16LE in-place, sim-volume reflection)', () => {
 })
 
 describe('readSimVolume (sim_volume → 0-1 gain)', () => {
-  it('maps sim_volume 0-100 to a 0-1 gain', () => {
-    mockExecFileSync.mockReturnValue(JSON.stringify({ sim_volume: 87 }) as never)
-    expect(readSimVolume('udid')).toBeCloseTo(0.87)
-    mockExecFileSync.mockReturnValue(JSON.stringify({ sim_volume: 100 }) as never)
-    expect(readSimVolume('udid')).toBe(1)
-    mockExecFileSync.mockReturnValue(JSON.stringify({ sim_volume: 0 }) as never)
-    expect(readSimVolume('udid')).toBe(0)
+  it('maps sim_volume 0-100 to a 0-1 gain', async () => {
+    plutil(JSON.stringify({ sim_volume: 87 }))
+    expect(await readSimVolume('udid')).toBeCloseTo(0.87)
+    plutil(JSON.stringify({ sim_volume: 100 }))
+    expect(await readSimVolume('udid')).toBe(1)
+    plutil(JSON.stringify({ sim_volume: 0 }))
+    expect(await readSimVolume('udid')).toBe(0)
   })
 
-  it('clamps above 100 to 1', () => {
-    mockExecFileSync.mockReturnValue(JSON.stringify({ sim_volume: 150 }) as never)
-    expect(readSimVolume('udid')).toBe(1)
+  it('clamps above 100 to 1', async () => {
+    plutil(JSON.stringify({ sim_volume: 150 }))
+    expect(await readSimVolume('udid')).toBe(1)
   })
 
-  it('defaults to full volume (1) when the plist is unreadable', () => {
-    mockExecFileSync.mockImplementation(() => { throw new Error('plist missing') })
-    expect(readSimVolume('udid')).toBe(1)
+  it('defaults to full volume (1) when the plist is unreadable', async () => {
+    plutil('', new Error('plist missing'))
+    expect(await readSimVolume('udid')).toBe(1)
   })
 
-  it('defaults to full volume (1) when sim_volume is absent', () => {
-    mockExecFileSync.mockReturnValue(JSON.stringify({ sim_ringer_state: 1 }) as never)
-    expect(readSimVolume('udid')).toBe(1)
+  it('defaults to full volume (1) when sim_volume is absent or the output is not JSON', async () => {
+    plutil(JSON.stringify({ sim_ringer_state: 1 }))
+    expect(await readSimVolume('udid')).toBe(1)
+    plutil('not json')
+    expect(await readSimVolume('udid')).toBe(1)
   })
 })
 

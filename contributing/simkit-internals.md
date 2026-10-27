@@ -171,7 +171,7 @@ let mask: UInt32    = isUp ? 0x06 : 0x07
 let contact: UInt32 = isUp ? 0 : 1
 
 guard let parent = createDigitizer(nil, ts, 2, 0, 1, mask, 0, x, y, 0, 0, 0, contact, contact, 0),
-      let finger = createFinger(nil, ts, 0, 1, mask, x, y, 0, 0, 0, contact, contact, 0) else { return }
+      let finger = createFinger(nil, ts, 1, 1, mask, x, y, 0, 0, 0, contact, contact, 0) else { return }
 appendEvent(parent, finger, 0)
 
 guard let msgPtr = trackpadWrap(parent) else { return }

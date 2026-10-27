@@ -100,7 +100,7 @@ vi.mock('@tapflowio/audiotap-helper', () => ({
   isAudioSupported: vi.fn(() => true),
 }))
 vi.mock('../SimProcessTree', () => ({
-  enumerateSimPids: vi.fn(() => [101, 102, 103]),
+  enumerateSimPids: vi.fn(() => Promise.resolve([101, 102, 103])),
 }))
 
 import crypto from 'crypto'
@@ -110,6 +110,7 @@ import { IOSAgent, leanSupported, streamRestartPlan } from '../IOSAgent'
 import type { DeviceChromeLoader, ChromeData } from '../DeviceChromeLoader'
 import { ScreenCaptureStreamer } from '../ScreenCaptureStreamer'
 import { AudioCaptureStreamer } from '../AudioCaptureStreamer'
+import { enumerateSimPids } from '../SimProcessTree'
 import { launchAudioHelper } from '@tapflowio/audiotap-helper'
 import { SimctlWrapper } from '../SimctlWrapper'
 import { LeanStore, parseDisabledStore } from '../LeanStore'
@@ -209,6 +210,7 @@ function mockSimctl(booted: boolean | 'unknown' = false): SimctlWrapper {
     // assertion below read a state assembled from a failure nobody could see.
     setStatusBarOffline: vi.fn().mockResolvedValue(undefined),
     setSimulatorEnv: vi.fn().mockResolvedValue(undefined),
+    unsetSimulatorEnv: vi.fn().mockResolvedValue(undefined),
     // Every boot stands the simulator up (#910). Absent, that step threw into the rotation queue's
     // `.catch` and every boot test ran the failure path without saying so.
     rotate: vi.fn().mockResolvedValue(undefined),
@@ -719,6 +721,194 @@ describe('IOSAgent', () => {
       expect(stopIfDevice).toHaveBeenCalledWith('dev-1')
       const shutdownOrder = (simctl.shutdown as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!
       expect(stopIfDevice.mock.invocationCallOrder[0]!).toBeLessThan(shutdownOrder)
+
+      agent.disconnect()
+      browser.close()
+    })
+  })
+
+  describe('network hook on automation boots', () => {
+    afterEach(() => { vi.restoreAllMocks() })
+
+    const DYLD = 'DYLD_INSERT_LIBRARIES'
+    const dyldSets = (simctl: SimctlWrapper) =>
+      (simctl.setSimulatorEnv as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[1] === DYLD)
+
+    async function bootAs(simctl: SimctlWrapper, clientKind?: string) {
+      const browser = new WebSocket(`ws://localhost:${port}`)
+      await waitForOpen(browser)
+      const agent = new IOSAgent({ intervalMs: 50 }, simctl)
+      await agent.connect(`ws://localhost:${port}`)
+      browser.send(JSON.stringify({ type: 'session:start', sessionId: agent.sessionId, ...(clientKind ? { clientKind } : {}) }))
+      await waitForType(browser, 'session:joined')
+      return { agent, browser }
+    }
+    const boot = async (browser: WebSocket, agent: IOSAgent, requestId: string) => {
+      browser.send(JSON.stringify({ type: 'device:boot', requestId, sessionId: agent.sessionId, payload: { deviceId: 'dev-1' } }))
+      await waitForType(browser, 'device:ready')
+    }
+
+    it.each(['mcp', 'flow-runner'] as const)('a boot by a %s holder unsets DYLD_INSERT_LIBRARIES and never sets it', async (clientKind) => {
+      const simctl = mockSimctl(true)
+      const { agent, browser } = await bootAs(simctl, clientKind)
+      await boot(browser, agent, 'rq-auto')
+
+      expect(simctl.unsetSimulatorEnv).toHaveBeenCalledWith('dev-1', DYLD)
+      expect(dyldSets(simctl)).toEqual([])
+
+      agent.disconnect()
+      browser.close()
+    })
+
+    it.each([['dashboard'], [undefined]] as const)('a boot by a %s holder sets DYLD_INSERT_LIBRARIES and does not unset it', async (clientKind) => {
+      const simctl = mockSimctl(true)
+      const { agent, browser } = await bootAs(simctl, clientKind)
+      await boot(browser, agent, 'rq-dash')
+
+      expect(dyldSets(simctl)).toHaveLength(1)
+      expect(simctl.unsetSimulatorEnv).not.toHaveBeenCalled()
+
+      agent.disconnect()
+      browser.close()
+    })
+
+    it('a dashboard boot after an automation boot of the same device sets DYLD_INSERT_LIBRARIES again', async () => {
+      const simctl = mockSimctl(true)
+      const { agent, browser: automation } = await bootAs(simctl, 'mcp')
+      await boot(automation, agent, 'rq-auto')
+      expect(dyldSets(simctl)).toEqual([])
+
+      automation.send(JSON.stringify({ type: 'session:leave', sessionId: agent.sessionId }))
+      // `session:leave` is unanswered; closing the socket after it is what lets the next holder join.
+      automation.close()
+      const dashboard = new WebSocket(`ws://localhost:${port}`)
+      await waitForOpen(dashboard)
+      dashboard.send(JSON.stringify({ type: 'session:start', sessionId: agent.sessionId, clientKind: 'dashboard' }))
+      await waitForType(dashboard, 'session:joined')
+      // Not `boot()`: joining replays a `device:ready` to the new holder, so waiting for one would return
+      // before this boot reached the agent. The arm itself is the signal.
+      dashboard.send(JSON.stringify({ type: 'device:boot', requestId: 'rq-dash', sessionId: agent.sessionId, payload: { deviceId: 'dev-1' } }))
+      await vi.waitFor(() => expect(dyldSets(simctl)).toHaveLength(1))
+      const unsetOrder = (simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!
+      const setOrder = (simctl.setSimulatorEnv as ReturnType<typeof vi.fn>).mock.invocationCallOrder
+        .filter((_, i) => (simctl.setSimulatorEnv as ReturnType<typeof vi.fn>).mock.calls[i]![1] === DYLD)[0]!
+      expect(setOrder).toBeGreaterThan(unsetOrder)
+
+      agent.disconnect()
+      dashboard.close()
+    })
+
+    // The join-then-launch path: a holder that finds the device already booted never sends `device:boot`.
+    const launchAs = async (simctl: SimctlWrapper, clientKind: string) => {
+      const { agent, browser } = await bootAs(simctl, clientKind)
+      await boot(browser, agent, 'rq-boot')
+      const unsetsAfterBoot = (simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mock.calls.length
+      // The relay resolves the bundle id from a stored build, so the launch needs a row to point at.
+      const db = getDb()
+      const appId = Number(db.prepare("INSERT INTO apps (name, bundle_id_key, platform) VALUES ('Unhook', ?, 'ios')").run(`com.example.unhook${Date.now()}${Math.random()}`).lastInsertRowid)
+      const buildId = Number(db.prepare("INSERT INTO builds (app_id, version_name, build_number, bundle_id, file_path) VALUES (?, '1.0.0', '1', 'com.example.app', '/tmp/x.zip')").run(appId).lastInsertRowid)
+      browser.send(JSON.stringify({ type: 'app:launch', requestId: 'rq-launch', sessionId: agent.sessionId, buildId }))
+      await waitForType(browser, 'app:launch-done')
+      return { agent, browser, unsetsAfterBoot }
+    }
+
+    it('an mcp holder\'s app:launch unsets DYLD_INSERT_LIBRARIES before simctl launch', async () => {
+      const simctl = mockSimctl(true)
+      const { agent, browser, unsetsAfterBoot } = await launchAs(simctl, 'mcp')
+
+      // Counted from after the boot: the boot of an mcp holder unsets too, so comparing the last unset to the
+      // launch would pass with no launch-time disarm at all (a mutation that dropped it survived that shape).
+      const unset = simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>
+      expect(unset.mock.calls.length).toBeGreaterThan(unsetsAfterBoot)
+      expect(unset.mock.calls[unsetsAfterBoot]).toEqual(['dev-1', DYLD])
+      expect(unset.mock.invocationCallOrder[unsetsAfterBoot]!).toBeLessThan((simctl.launchApp as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!)
+
+      agent.disconnect()
+      browser.close()
+    })
+
+    it('a dashboard holder\'s app:launch does not unset DYLD_INSERT_LIBRARIES', async () => {
+      const simctl = mockSimctl(true)
+      const { agent, browser, unsetsAfterBoot } = await launchAs(simctl, 'dashboard')
+
+      expect((simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(unsetsAfterBoot)
+      expect(simctl.launchApp).toHaveBeenCalled()
+
+      agent.disconnect()
+      browser.close()
+    })
+
+    it('an app:launch still launches and answers app:launch-done when the unset fails, and warns', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const simctl = mockSimctl(true)
+      ;(simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('spawn failed'))
+      const { agent, browser } = await launchAs(simctl, 'mcp')
+
+      expect(simctl.launchApp).toHaveBeenCalled()
+      // One from the boot disarm, one from the launch one: both name the same failure.
+      expect(warn.mock.calls.filter((c) => String(c.join(' ')).includes('could not disarm the network injection before launch'))).toHaveLength(1)
+
+      agent.disconnect()
+      browser.close()
+    })
+
+    const openUrlAs = async (simctl: SimctlWrapper, clientKind: string) => {
+      const { agent, browser } = await bootAs(simctl, clientKind)
+      await boot(browser, agent, 'rq-boot')
+      const unsetsAfterBoot = (simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mock.calls.length
+      browser.send(JSON.stringify({ type: 'open-url', requestId: 'rq-url', sessionId: agent.sessionId, payload: { url: 'myapp://x' } }))
+      const reply = await waitForType(browser, 'open-url:done')
+      return { agent, browser, unsetsAfterBoot, reply }
+    }
+
+    it('an mcp holder\'s open-url unsets DYLD_INSERT_LIBRARIES before simctl openurl', async () => {
+      const simctl = mockSimctl(true)
+      const { agent, browser, reply, unsetsAfterBoot } = await openUrlAs(simctl, 'mcp')
+
+      expect(reply.requestId).toBe('rq-url')
+      // Counted from after the boot, for the reason the launch test gives.
+      const unset = simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>
+      expect(unset.mock.calls.length).toBeGreaterThan(unsetsAfterBoot)
+      expect(unset.mock.calls[unsetsAfterBoot]).toEqual(['dev-1', DYLD])
+      expect(unset.mock.invocationCallOrder[unsetsAfterBoot]!).toBeLessThan((simctl.openUrl as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!)
+
+      agent.disconnect()
+      browser.close()
+    })
+
+    it('a dashboard holder\'s open-url does not unset DYLD_INSERT_LIBRARIES', async () => {
+      const simctl = mockSimctl(true)
+      const { agent, browser, unsetsAfterBoot } = await openUrlAs(simctl, 'dashboard')
+
+      expect((simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(unsetsAfterBoot)
+      expect(simctl.openUrl).toHaveBeenCalled()
+
+      agent.disconnect()
+      browser.close()
+    })
+
+    it('an open-url still opens and answers open-url:done when the unset fails, and warns', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const simctl = mockSimctl(true)
+      ;(simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('spawn failed'))
+      const { agent, browser } = await openUrlAs(simctl, 'mcp')
+
+      expect(simctl.openUrl).toHaveBeenCalled()
+      expect(warn.mock.calls.filter((c) => String(c.join(' ')).includes('before open-url'))).toHaveLength(1)
+
+      agent.disconnect()
+      browser.close()
+    })
+
+    it('an automation boot still answers device:ready when unsetting DYLD_INSERT_LIBRARIES fails, and warns once', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const simctl = mockSimctl(true)
+      ;(simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('spawn failed'))
+      const { agent, browser } = await bootAs(simctl, 'mcp')
+      await boot(browser, agent, 'rq-fail')
+
+      const disarmWarnings = warn.mock.calls.filter((c) => String(c.join(' ')).includes('could not disarm'))
+      expect(disarmWarnings).toHaveLength(1)
 
       agent.disconnect()
       browser.close()
@@ -2809,7 +2999,7 @@ describe('IOSAgent', () => {
       const hookDylib = path.join(dir, 'libtapflow-nethook.dylib')
       fs.writeFileSync(hookDylib, '')
       return new SimulatorNetwork(
-        { setStatusBarOffline: async () => {}, setSimulatorEnv: async () => {} },
+        { setStatusBarOffline: async () => {}, setSimulatorEnv: async () => {}, unsetSimulatorEnv: async () => {} },
         {
           filterHostBinary: host,
           conditionDir: dir,
@@ -3911,6 +4101,137 @@ describe('IOSAgent', () => {
         setSpy.mockRestore()
         clearSpy.mockRestore()
       }
+    })
+
+    // The sim's process tree and volume are read asynchronously now (`ps` held the event loop ~40 ms every
+    // 1.5 s, which a drag showed as a hitch), so a read can land after the capture it was for has stopped.
+    describe('reads that land after the capture stopped', () => {
+      const mockEnumerate = vi.mocked(enumerateSimPids)
+      const held = () => {
+        let release!: (pids: number[]) => void
+        const promise = new Promise<number[]>((r) => { release = r })
+        return { promise, release }
+      }
+      beforeEach(() => mockEnumerate.mockClear())
+      afterEach(() => { mockEnumerate.mockReset(); mockEnumerate.mockImplementation(() => Promise.resolve([101, 102, 103])) })
+
+      it('launches no helper for a capture stopped while its first read was in flight', async () => {
+        const first = held()
+        mockEnumerate.mockImplementationOnce(() => first.promise)
+        const { agent, browser } = await bootSession()
+        await vi.waitFor(() => expect(mockEnumerate).toHaveBeenCalledTimes(1))
+        agent.disconnect()
+        first.release([101, 102, 103])
+        await new Promise((r) => setTimeout(r, 30))
+        expect(mockLaunchAudioHelper).not.toHaveBeenCalled()
+        browser.close()
+      })
+
+      it('polls one read at a time, and hands a live capture the new pids when the read lands', async () => {
+        const poll = held()
+        mockEnumerate
+          .mockImplementationOnce(() => Promise.resolve([101, 102, 103]))
+          .mockImplementationOnce(() => poll.promise)
+        const { agent, browser } = await bootSession()
+        await vi.waitFor(() => expect(mockLaunchAudioHelper).toHaveBeenCalledTimes(1))
+        await vi.waitFor(() => expect(mockEnumerate).toHaveBeenCalledTimes(2), { timeout: 3_000 })
+        // A whole poll interval passes with that read still out: no second read is stacked on it.
+        await new Promise((r) => setTimeout(r, 1_700))
+        expect(mockEnumerate).toHaveBeenCalledTimes(2)
+        const capture = MockAudioStreamer.mock.results[0].value as { updatePids: ReturnType<typeof vi.fn> }
+        poll.release([101, 102, 103, 104])
+        await vi.waitFor(() => expect(capture.updatePids).toHaveBeenCalledWith([101, 102, 103, 104]))
+        // And the poll after it runs again.
+        await vi.waitFor(() => expect(mockEnumerate).toHaveBeenCalledTimes(3), { timeout: 3_000 })
+        agent.disconnect(); browser.close()
+      }, 10_000)
+
+      it('does not hand a stopped capture the pids of a poll that was in flight', async () => {
+        const poll = held()
+        mockEnumerate
+          .mockImplementationOnce(() => Promise.resolve([101, 102, 103]))
+          .mockImplementationOnce(() => poll.promise)
+        const { agent, browser } = await bootSession()
+        await vi.waitFor(() => expect(mockEnumerate).toHaveBeenCalledTimes(2), { timeout: 3_000 })
+        const capture = MockAudioStreamer.mock.results[0].value as { updatePids: ReturnType<typeof vi.fn> }
+        agent.disconnect()
+        poll.release([101, 102, 103, 104])
+        await new Promise((r) => setTimeout(r, 30))
+        expect(capture.updatePids).not.toHaveBeenCalled()
+        browser.close()
+      }, 10_000)
+    })
+  })
+
+  // The two memory reads run off the event loop now (they held it 4 ms in a built agent and ~200 ms under tsx,
+  // every 5 s), so a sample can land after its socket closed, or while the next tick is due.
+  describe('resource reports (agent:resources)', () => {
+    type Sampler = { getMemoryUsage: () => Promise<{ memUsedMB: number; memTotalMB: number }>; getMemoryPressure: () => Promise<undefined> }
+    type Internals = { resources: Sampler; reportResources: () => Promise<void>; sendOn: (ws: unknown, msg: { type: string }) => void }
+    function holdSamples(agent: IOSAgent) {
+      const internals = agent as unknown as Internals
+      const releases: Array<() => void> = []
+      internals.resources.getMemoryUsage = () => new Promise((r) => { releases.push(() => r({ memUsedMB: 1, memTotalMB: 2 })) })
+      internals.resources.getMemoryPressure = () => Promise.resolve(undefined)
+      const sendOn = vi.spyOn(internals, 'sendOn')
+      const reports = () => sendOn.mock.calls.filter(([, msg]) => msg.type === 'agent:resources').length
+      return { internals, releases, reports }
+    }
+
+    it('sends nothing for a sample that lands after its socket closed', async () => {
+      const agent = new IOSAgent({ intervalMs: 50 }, mockSimctl())
+      const { releases, reports } = holdSamples(agent)
+      await agent.connect(`ws://localhost:${port}`)
+      await vi.waitFor(() => expect(releases).toHaveLength(1))
+      agent.disconnect()
+      releases[0]()
+      await new Promise((r) => setTimeout(r, 30))
+      expect(reports()).toBe(0)
+    })
+
+    it('sends a sample that lands while its socket is open', async () => {
+      const agent = new IOSAgent({ intervalMs: 50 }, mockSimctl())
+      const { releases, reports } = holdSamples(agent)
+      await agent.connect(`ws://localhost:${port}`)
+      await vi.waitFor(() => expect(releases).toHaveLength(1))
+      releases[0]()
+      await vi.waitFor(() => expect(reports()).toBe(1))
+      agent.disconnect()
+    })
+
+    it('takes one sample at a time, and the next once it lands', async () => {
+      const agent = new IOSAgent({ intervalMs: 50 }, mockSimctl())
+      const { internals, releases, reports } = holdSamples(agent)
+      await agent.connect(`ws://localhost:${port}`) // its own report is the one in flight
+      await vi.waitFor(() => expect(releases).toHaveLength(1))
+      await internals.reportResources()
+      expect(releases).toHaveLength(1)
+      releases[0]()
+      await vi.waitFor(() => expect(reports()).toBe(1))
+      void internals.reportResources()
+      expect(releases).toHaveLength(2)
+      releases[1]()
+      await vi.waitFor(() => expect(reports()).toBe(2))
+      agent.disconnect()
+    })
+
+    it('reports on a new socket while the old socket\'s sample is still out, and leaves the new one in charge', async () => {
+      const agent = new IOSAgent({ intervalMs: 50 }, mockSimctl())
+      const { internals, releases, reports } = holdSamples(agent)
+      await agent.connect(`ws://localhost:${port}`)
+      await vi.waitFor(() => expect(releases).toHaveLength(1))
+      agent.disconnect()
+      await agent.connect(`ws://localhost:${port}`)
+      // The reconnect's own report starts at once: the old socket's sample is not the new socket's.
+      await vi.waitFor(() => expect(releases).toHaveLength(2))
+      // The old sample landing must not clear the flag the new one holds.
+      releases[0]()
+      await new Promise((r) => setTimeout(r, 10))
+      void internals.reportResources()
+      expect(releases).toHaveLength(2)
+      releases[1]()
+      await vi.waitFor(() => expect(reports()).toBe(1))
+      agent.disconnect()
     })
   })
 

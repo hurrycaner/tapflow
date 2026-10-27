@@ -1,6 +1,6 @@
 import net from 'node:net'
 import os from 'node:os'
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import type { AudioFrame } from '@tapflowio/agent-core'
 import { createLogger } from '@tapflowio/agent-core'
@@ -15,17 +15,22 @@ const logger = createLogger('ios-agent:audio')
  * Read the simulator's current media volume (`sim_volume`, 0–100) from its audiosettings.plist and
  * return it as a 0–1 gain. The Core Audio process tap captures audio *before* the simulator applies
  * its volume, so the agent multiplies it back in. The plist updates live as the user changes the
- * simulator volume. Returns 1 (full) when unreadable — a volume-read failure must never mute audio.
+ * simulator volume. Resolves 1 (full) when unreadable — a volume-read failure must never mute audio.
+ * Asynchronous because it is polled beside `enumerateSimPids`, on the loop that carries the video.
  */
-export function readSimVolume(udid: string): number {
+export function readSimVolume(udid: string): Promise<number> {
   const plist = join(os.homedir(), 'Library', 'Developer', 'CoreSimulator', 'Devices', udid,
     'data', 'var', 'run', 'simulatoraudio', 'audiosettings.plist')
-  try {
-    const json = execFileSync('plutil', ['-convert', 'json', '-o', '-', plist], { encoding: 'utf8' })
-    const v = (JSON.parse(json) as { sim_volume?: number }).sim_volume
-    if (typeof v === 'number' && v >= 0) return Math.min(1, v / 100)
-  } catch { /* plist missing / not yet created → full volume */ }
-  return 1
+  return new Promise((resolve) => {
+    execFile('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plist], { encoding: 'utf8', timeout: 2_000, killSignal: 'SIGKILL' },
+      (err, json) => {
+        if (err) return resolve(1) // plist missing / not yet created → full volume
+        try {
+          const v = (JSON.parse(json) as { sim_volume?: number }).sim_volume
+          resolve(typeof v === 'number' && v >= 0 ? Math.min(1, v / 100) : 1)
+        } catch { resolve(1) }
+      })
+  })
 }
 
 // Wire format from the audiotap-helper: length-prefixed PCM frames — [u32 BE len][PCM bytes], where

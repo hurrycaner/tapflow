@@ -19,16 +19,18 @@ is the slow-decay other half of the already-merged register-time dedup.
 
 ## The design (standard ws heartbeat)
 
-Every tick, terminate any socket that did not answer the previous ping, then ping the rest:
+Every tick, terminate any socket whose last pong is too old, then ping the rest:
 
 ```text
-on connection: setAlive(ws, true); ws.on('pong', () => setAlive(ws, true))
+on connection: lastPongAt.set(ws, now); ws.on('pong', () => lastPongAt.set(ws, now))
 heartbeat tick (every HEARTBEAT_MS):
   for ws of wss.clients:
-    if (!isAlive(ws)) { ws.terminate(); continue }   // missed last pong → dead
-    setAlive(ws, false)
+    if (!isAlive(ws)) { ws.terminate(); continue }   // now − lastPongAt > 1.5 × HEARTBEAT_MS → dead
     if (ws.readyState === OPEN) ws.ping()             // never ping a non-OPEN socket
 ```
+
+No entry means just connected, which counts as alive. (A boolean flag reset each tick came first; the
+timestamp replaced it.)
 
 Dead-socket detection therefore takes at most about `2 × HEARTBEAT_MS`.
 

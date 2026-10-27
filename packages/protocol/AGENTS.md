@@ -44,7 +44,7 @@ The cost of a broad name is ambiguity about what belongs — answered by the two
   - **`SchemaExact` ties each schema to its interface**, and refuses `z.custom<T>()` and a
     `const s: z.ZodType<T>` annotation by kind, because both produce `T` with no `any` for `IsAny` to
     catch and would compare `T` with itself.
-  - **The envelope is judged before the payload**, so a payload failure on one of the thirteen correlated
+  - **The envelope is judged before the payload**, so a payload failure on one of the thirteen answerable
     browser requests comes back as `bad-payload` carrying the address and the correlator — which is what
     lets the relay answer it instead of dropping it. `ANSWERABLE` is that set; keeping it equal to the
     correlated request set is `scripts/__tests__/correlatedRequestsGated.test.mjs`'s job, because
@@ -141,8 +141,8 @@ rather than per tab-storage is a relay implementation decision and lives in
 ## Request/response correlation — `requestId`, required on both sides
 
 Correlated by `requestId` today: `screenshot`, `ui:tree`, `clipboard`, the app commands (`open-url`,
-`app:install`, `app:launch`, `app:clear-state`), the device lifecycle (`device:boot`, `device:shutdown` — see
-「Lifecycle correlation」), and **the inputs an ack answers** (see 「Input correlation」). What is left correlates
+`app:install`, `app:launch`, `app:clear-state`), `network:set`, the device lifecycle (`device:boot`,
+`device:shutdown` — see 「Lifecycle correlation」), the lease (`device:lease`, which names no session), and **the inputs an ack answers** (see 「Input correlation」). What is left correlates
 by `sessionId` + message type, and the reason a pair is *not* in the set is always one of the two below.
 
 `#499` was the last of the defects that came from having no correlator, and it was the sharpest: the four pairs
@@ -207,7 +207,8 @@ first written here as putting a pair *outside* correlation, which was wrong by o
 ## Lifecycle correlation — where the correlator is optional, and what that costs
 
 `device:boot` / `device:shutdown` correlate, but not in the shape above: the **request** side of `device:boot`
-is required and every reply is `requestId?`. Absence has exactly one meaning, and it is the one worth stating
+is required and every reply is `requestId?` except `device:boot-waiting`, which only ever answers a held boot
+and so declares it required. Absence on the rest has exactly one meaning, and it is the one worth stating
 at each declaration: **this frame is not the answer to a request.** Not "an old agent" — that reading is what
 made the first draft of this pair wrong.
 
@@ -268,7 +269,7 @@ Five requests carry a required `requestId`: the four terminal frames (`input:tou
 `input:key`, `input:button`) and `input:type`. The four replies do too — `input:done`, `input:error`,
 `input:type-done`, `input:type-error`.
 
-**Opening and move frames carry none, and neither does `input:rotate`.** Nothing acks them
+**Opening and move frames carry none, and neither does `input:rotate` or `input:posture`.** Nothing acks them
 (`ios-agent/AGENTS.md`: *"Opening frames stay silent: they carry no ack obligation"*), so an id there would
 name a waiter that does not exist. `input:keyboard:toggle` is out for a different reason — see below.
 
@@ -299,7 +300,7 @@ downstream could see it.
 does not narrow `msg.requestId` inside the case, so the shortest way to satisfy the reply's required field
 would be `msg.requestId!` — the assertion removed from `open-url` and then from clipboard.
 
-### The eleven input cases became two clauses
+### The twelve input cases became two clauses
 
 `input:*` shared one `case` body. Only five of them are answered, so a gate written into a shared body would
 have dropped every opening and move frame with it: no swipe, no pinch, no rotation, and nothing said.
@@ -370,8 +371,8 @@ claimed *"the escape hatch for a failure the relay cannot correlate to a session
 `SessionStartFailure`'s claimed the reason has **a single producer inside `handleSessionStart`**. Both cannot
 be true, and the program plan recorded that they were both in HEAD.
 
-L5c settled it by removing the general role rather than the specific one. A request naming no session is
-dropped at the relay's door — by the schema in `src/validate/` since #444, and by an `isAddressed`
+L5c settled it by removing the general role rather than the specific one. A request whose schema declares a
+session and names none is dropped at the relay's door — by the schema in `src/validate/` since #444, and by an `isAddressed`
 predicate before that — because answering it would ship a frame whose own required
 `sessionId` `JSON.stringify` erases — and `error` has no `requestId` either, so a caller could not attribute
 the answer and would wait out the same deadline silence costs. With nothing left needing an unaddressed
@@ -405,7 +406,8 @@ so against an old relay the first refused session logged and every later one was
 
 A teammate can watch, read-only, a session an AI client holds: `watch:start` / `watch:stop` from the
 browser, `watch:started` / `watch:refused` in answer, then `watch:holder-left` and `watch:ended` as the
-session moves under the watcher.
+session moves under the watcher, plus `watch:action` — what the holder just did, built by the relay and
+sent to watchers only.
 
 **Who is an AI client is declared, not inferred.** `session:start` carries `clientKind`. Reading it off the
 credential (a PAT means a tool, a cookie means a person) was the first design and was dropped: a new auth
@@ -486,7 +488,7 @@ tables pin it. They come from two producers, and the difference matters to the
   them, so **no compiler sees them.** That is why all twelve forward-only messages were absent from this file until L3, and why
   `scripts/__tests__/browserInboundRouting.test.mjs` exists: it compares the relay's forward case
   labels against this union in both directions.
-- **`RelayOrAgentToBrowser`** — the ten with *both* producers (the relay replays session state to a
+- **`RelayOrAgentToBrowser`** — the ones with *both* producers (the relay replays session state to a
   re-joining viewer, and answers a request it cannot deliver). Declared **once** and referenced by
   both unions. Two copies of one message drift, which is not hypothetical: the dashboard kept its own
   copy of this whole surface and four members had diverged with nothing reporting it.
@@ -512,7 +514,8 @@ a different question from addressing, and the parse does not answer it. The decl
 stay required rather than be widened:
 
 - Every in-repo sender does supply one. `BrowserToRelay` declares `sessionId: string` on every member
-  but `agents:list`, and since L4c all three senders are typed against that union, so the compiler
+  but `agents:list` and `device:lease` — the one asks about every device and the other asks the relay to
+  *choose* one, so neither can name a session. Since L4c all three senders are typed against that union, so the compiler
   enforces it rather than convention. (This bullet used to read "the untyped senders (`mcp-server`,
   `flow-runner`) set it too" — true when written, and falsified by the work that typed them.)
 - `'Session not found'` answers a sessionId that did not **match** — a stale tab, a terminated
@@ -591,7 +594,10 @@ So a change to what an existing wire value *means* is made like this:
    forwards verbatim to the viewer on `session:joined`, `session:rebound` and the device listing, so an
    agent can announce "I mean the new thing" with no schema change, and a viewer can fall back when the
    marker is absent. The relay must stay a conduit for the list for this to work — it checks its own
-   gates through `hasCapability` and never filters the list.
+   gates through `hasCapability` and never filters the list. That marker covers the **relay ↔ agent**
+   pair; for **open tab ↔ relay** it is `AgentsListed.features` (`RelayFeature`), a closed union the relay
+   announces on the listing, so a client can tell a relay that understands a new message from one that
+   drops it in silence. `device:lease` and launch options are gated on it.
 
 #662 asked for a version field on `agent:register`. It was not added: the two skews it described never
 shipped (network control, the reason split and `enforcement-lost` all first released together in

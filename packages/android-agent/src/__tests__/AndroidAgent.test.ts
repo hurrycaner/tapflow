@@ -341,6 +341,55 @@ describe('AndroidAgent', () => {
     })
   })
 
+  // The two memory reads run off the event loop now (they held it 4 ms in a built agent and ~200 ms under tsx,
+  // every 5 s), so a sample can land after the socket it was taken for closed.
+  describe('resource reports (agent:resources)', () => {
+    type Internals = {
+      resources: { getMemoryUsage: () => Promise<{ memUsedMB: number; memTotalMB: number }>; getMemoryPressure: () => Promise<undefined> }
+      reportResources: () => Promise<void>
+      sendOn: (ws: unknown, msg: { type: string }) => void
+    }
+    function holdSamples(agent: AndroidAgent) {
+      const internals = agent as unknown as Internals
+      const releases: Array<() => void> = []
+      internals.resources.getMemoryUsage = () => new Promise((r) => { releases.push(() => r({ memUsedMB: 1, memTotalMB: 2 })) })
+      internals.resources.getMemoryPressure = () => Promise.resolve(undefined)
+      const sendOn = vi.spyOn(internals, 'sendOn')
+      return { internals, releases, reports: () => sendOn.mock.calls.filter(([, msg]) => msg.type === 'agent:resources').length }
+    }
+
+    it('takes one sample at a time', async () => {
+      const agent = new AndroidAgent({}, mockAdb())
+      const { internals, releases, reports } = holdSamples(agent)
+      await agent.connect(`ws://localhost:${port}`) // its own report is the one in flight
+      await vi.waitFor(() => expect(releases).toHaveLength(1))
+      await internals.reportResources()
+      expect(releases).toHaveLength(1)
+      releases[0]()
+      await vi.waitFor(() => expect(reports()).toBe(1))
+      agent.disconnect()
+    })
+
+    it('sends nothing for a sample that lands after its socket closed, and sends one that lands while open', async () => {
+      const stale = new AndroidAgent({}, mockAdb())
+      const held = holdSamples(stale)
+      await stale.connect(`ws://localhost:${port}`)
+      await vi.waitFor(() => expect(held.releases).toHaveLength(1))
+      stale.disconnect()
+      held.releases[0]()
+      await new Promise((r) => setTimeout(r, 30))
+      expect(held.reports()).toBe(0)
+
+      const live = new AndroidAgent({}, mockAdb())
+      const open = holdSamples(live)
+      await live.connect(`ws://localhost:${port}`)
+      await vi.waitFor(() => expect(open.releases).toHaveLength(1))
+      open.releases[0]()
+      await vi.waitFor(() => expect(open.reports()).toBe(1))
+      live.disconnect()
+    })
+  })
+
   describe('device:boot flow', () => {
     it('sends device:booting then device:ready', async () => {
       const adb = mockAdb(false)

@@ -280,6 +280,7 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
    *  falling back to nothing would blank a form factor it already had until the next reconnect. */
   private formFactors = new Map<string, FormFactor>()
   private resourcesTimer: ReturnType<typeof setInterval> | null = null
+  private resourcesInFlight: WebSocket | null = null
   private readonly resources = createResourceSampler()
   private _stopping = false
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -296,7 +297,7 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
     }
     this.simctl = simctl ?? new SimctlWrapper()
     // **Never the real filter under vitest.** Layer 1 is a system extension installed on the
-    // developer's Mac, and `arm()` runs on every boot — so a suite that booted a mock device was
+    // developer's Mac, and `arm()` or `disarm()` runs on every boot, both rewriting the host rule — so a suite that booted a mock device was
     // launching the notarized container app and rewriting the host's live filter configuration, once
     // per boot test, on any machine where tapflow's own filter is installed. Nothing in the suite
     // said so, because the class reports a missing container app rather than failing.
@@ -433,8 +434,8 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
               this.handleRelayMessage(m as { type: string; sessionId: string; requestId?: string; payload?: unknown })
             } catch { /* ignore malformed */ }
           })
-          this.reportResources()
-          this.resourcesTimer = setInterval(() => this.reportResources(), 5000)
+          void this.reportResources()
+          this.resourcesTimer = setInterval(() => { void this.reportResources() }, 5000)
           this.lastPingAt = null
           this.lastSocketError = undefined
           ws.on('ping', () => { this.lastPingAt = Date.now() })
@@ -567,23 +568,37 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
     }, delay)
   }
 
-  private reportResources(): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
-    const bootedCount = Array.from(this.deviceStates.values()).filter((s) => s.streamReader !== null).length
-    const slotsTotal = this.deviceStates.size
-    const { memUsedMB, memTotalMB } = this.resources.getMemoryUsage()
-    this.sendOn(this.ws, {
-      type: 'agent:resources',
-      resources: {
-        cpuPercent: this.resources.getCpuPercent(),
-        memUsedMB,
-        memTotalMB,
-        slotsAvailable: Math.max(0, slotsTotal - bootedCount),
-        slotsTotal,
-        reportedAt: Date.now(),
-        memoryPressure: this.resources.getMemoryPressure(),
-      },
-    })
+  /** Samples off the event loop, then reports. One sample at a time per socket, so a slow one (bounded by its
+   *  1 s timeout) is not stacked by the next tick; keyed by socket, so a reconnect is not skipped behind the
+   *  old socket's sample. Slots and the clock are read after the sample, when the report leaves. */
+  private async reportResources(): Promise<void> {
+    const ws = this.ws
+    if (!ws || ws.readyState !== WebSocket.OPEN || this.resourcesInFlight === ws) return
+    this.resourcesInFlight = ws
+    try {
+      const [{ memUsedMB, memTotalMB }, memoryPressure] = await Promise.all([
+        this.resources.getMemoryUsage(),
+        this.resources.getMemoryPressure(),
+      ])
+      // A reconnect while sampling replaced the socket: this report has nowhere to go.
+      if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) return
+      const bootedCount = Array.from(this.deviceStates.values()).filter((s) => s.streamReader !== null).length
+      const slotsTotal = this.deviceStates.size
+      this.sendOn(ws, {
+        type: 'agent:resources',
+        resources: {
+          cpuPercent: this.resources.getCpuPercent(),
+          memUsedMB,
+          memTotalMB,
+          slotsAvailable: Math.max(0, slotsTotal - bootedCount),
+          slotsTotal,
+          reportedAt: Date.now(),
+          memoryPressure,
+        },
+      })
+    } finally {
+      if (this.resourcesInFlight === ws) this.resourcesInFlight = null
+    }
   }
 
   private cleanupDeviceState(state: DeviceState): void {
@@ -942,12 +957,17 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
       // ready. Clearing an app now and installing it after leaves a clean container.
       const runResetReport = runReset ? await this.resetForRun(deviceId, runReset, () => seq !== state.bootSeq) : undefined
       if (seq !== state.bootSeq) { this.abandonBoot(state, seq, sessionId, requestId); return }
-      // Arm the network injection while nothing is running on the device yet — dyld reads the
+      // Dashboard boots arm the network injection while nothing is running on the device yet — dyld reads the
       // environment at process start, so anything launched before this is unhooked for its whole life.
-      // Best-effort: the network toggle is opt-in and a device that cannot be armed says so through
+      // Automation boots (MCP, flow runner) must launch unhooked instead: fintech SDKs (Plaid, Pinwheel) read
+      // DYLD_INSERT_LIBRARIES as tampering and render a blank WebView. That is a disarm and not a skip,
+      // because a still-booted device carries the variable from an earlier dashboard boot; the next
+      // dashboard boot arms it again.
+      // Best-effort: the network toggle is opt-in and a device that cannot be (dis)armed says so through
       // `network:state.available`, which is a better answer than a boot that fails for it.
-      await this.network.arm(deviceId).catch((e: unknown) => {
-        logger.warn('could not arm the network injection:', (e as Error).message)
+      const networkStep = automation ? 'disarm' : 'arm'
+      await (automation ? this.network.disarm(deviceId) : this.network.arm(deviceId)).catch((e: unknown) => {
+        logger.warn(`could not ${networkStep} the network injection:`, (e as Error).message)
       })
       // **Stand it up (#910).** A fresh viewer always starts portrait, and a simulator left turned —
       // by a session whose undo never arrived, or one an agent restart reset the memory of — would
@@ -1401,7 +1421,16 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
         // The target is named BEFORE the launch, and the order is the whole point: dyld reads the
         // environment when the process starts, so naming it afterwards arms the next launch and leaves
         // this one unhooked while `available` would still say true.
-        this.network.target(launchState.deviceId, bundleId)
+        // An automation holder that joined a device already booted never sent `device:boot`, so the boot-time
+        // disarm never ran for it. Done here, before the target and the launch: SDK integrity checks read
+        // DYLD_INSERT_LIBRARIES as tampering, and dyld reads it when the process starts.
+        const automation = (msg.payload as { automation?: boolean }).automation === true
+        const unhook = automation
+          ? this.network.disarm(launchState.deviceId)
+              .catch((e: unknown) => logger.warn('could not disarm the network injection before launch:', (e as Error).message))
+          : Promise.resolve()
+        unhook
+          .then(() => this.network.target(launchState.deviceId, bundleId))
           .catch((e: unknown) => logger.warn('could not name the network target:', (e as Error).message))
           .then(() => this.simctl.launchApp(launchState.deviceId, bundleId, options))
           .then((pid) => {
@@ -1675,7 +1704,15 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
           respond({ type: 'open-url:error', message: 'no booted device' })
           break
         }
-        this.simctl.openUrl(state.deviceId, url)
+        // A deep link can be the first thing that starts the app on a device a dashboard left armed, so an
+        // automation holder disarms here as `app:launch` does.
+        const automation = (msg.payload as { automation?: boolean }).automation === true
+        const unhook = automation
+          ? this.network.disarm(state.deviceId)
+              .catch((e: unknown) => logger.warn('could not disarm the network injection before open-url:', (e as Error).message))
+          : Promise.resolve()
+        unhook
+          .then(() => this.simctl.openUrl(state.deviceId, url))
           .then(() => respond({ type: 'open-url:done' }))
           .catch((e: unknown) => {
             const message = e instanceof Error ? e.message : String(e)
@@ -2105,8 +2142,8 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
    *
    * `deviceStates` holds one entry per *registered* simulator, not per running one, so this used to
    * answer for a device that was shut down — or never booted. The network path is where that costs
-   * something: a toggle after a shutdown writes the kernel rule for a dead udid, and `arm()` is the
-   * only thing that clears it, which now happens on the *next* boot of that device. Until then the
+   * something: a toggle after a shutdown writes the kernel rule for a dead udid, and `arm()` and
+   * `disarm()` are the only things that clear it, which now happens on the *next* boot of that device. Until then the
    * host is dropping flows for nothing, and a simulator that reuses the udid comes up offline.
    *
    * **`booted` alone is not the check, and reading it as one is a regression this shipped once.**
@@ -2327,18 +2364,30 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
     const seq = state.bootSeq
     const streamer = new AudioCaptureStreamer()
     streamer.listen()
-      .then((port) => {
+      .then(async (port) => {
         // A reboot/shutdown/disconnect may have superseded this boot while listen() was binding —
         // discard so we don't leave an orphan helper/poll/server behind the current lifecycle.
         if (seq !== state.bootSeq || streamWs.readyState !== WebSocket.OPEN) { streamer.stop(); return }
         state.audioStreamer = streamer
         state.audioPort = port
-        state.audioVolume = readSimVolume(udid)
+        // Read before launching, so the first frames carry the sim's volume rather than full.
+        const [pids, volume] = await Promise.all([enumerateSimPids(udid), readSimVolume(udid)])
+        // A stop or reboot while reading retired this capture: `stopAudioCapture` already stopped `streamer`,
+        // and launching the helper now would tap a device nobody is streaming.
+        if (state.audioStreamer !== streamer) return
+        // Only the control socket's close tears audio down; a stream socket that closed while reading would
+        // leave a helper and a poll running for nothing until the next reboot.
+        if (streamWs.readyState !== WebSocket.OPEN) { this.stopAudioCapture(state); return }
+        state.audioVolume = volume
         void this.pumpAudio(streamWs, streamer.frames(), state)
-        this.launchWholeSimTap(state, udid)
+        this.launchWholeSimTap(state, pids)
+        // Started after the launch, so the first poll never races the launch's own pid set. One poll at a
+        // time: `ps` is bounded by its timeout, and a slow one is not stacked by the next tick.
+        let polling = false
         state.audioPoll = setInterval(() => {
-          this.refreshAudioPids(state, udid)
-          state.audioVolume = readSimVolume(udid) // track live sim-volume changes
+          if (polling) return
+          polling = true
+          void this.refreshAudio(state, udid, streamer).finally(() => { polling = false })
         }, AUDIO_POLL_MS)
       })
       .catch((e) => logger.warn(`audio capture server failed to start: ${e instanceof Error ? e.message : String(e)}`))
@@ -2346,9 +2395,8 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
 
   // Launch the tap helper for the simulator's whole process tree. Swallows errors — audio must never
   // break the launch/video path (e.g. helper build fails, or the user hasn't granted the audio
-  // permission). The helper holds the socket open; refreshAudioPids() pushes later updates to it.
-  private launchWholeSimTap(state: DeviceState, udid: string): void {
-    const pids = enumerateSimPids(udid)
+  // permission). The helper holds the socket open; refreshAudio() pushes later updates to it.
+  private launchWholeSimTap(state: DeviceState, pids: number[]): void {
     if (!pids.length) { logger.warn('no simulator processes to tap (audio idle until first poll)'); return }
     state.audioPids = new Set(pids)
     try {
@@ -2362,15 +2410,18 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
   // freshly spawned WebKit WebContent), push the updated set so the helper rebuilds its tap. Dead pids
   // need no rebuild — they resolve to no audio object, so the helper just stops mixing them; we still
   // refresh the baseline so a later reappearance is detected. Rebuilding only on additions keeps
-  // short-lived daemon churn from causing constant tap teardown (audio glitches).
-  private refreshAudioPids(state: DeviceState, udid: string): void {
-    if (!state.audioStreamer) return
-    const pids = enumerateSimPids(udid)
+  // short-lived daemon churn from causing constant tap teardown (audio glitches). Also tracks live sim-volume
+  // changes. Both reads are asynchronous, so the capture may have been retired by the time they land; `streamer`
+  // is the capture this poll belongs to.
+  private async refreshAudio(state: DeviceState, udid: string, streamer: AudioCaptureStreamer): Promise<void> {
+    const [pids, volume] = await Promise.all([enumerateSimPids(udid), readSimVolume(udid)])
+    if (state.audioStreamer !== streamer) return
+    state.audioVolume = volume
     if (!pids.length) return
     const prev = state.audioPids
     const hasNew = !prev || pids.some((p) => !prev.has(p))
     state.audioPids = new Set(pids)
-    if (hasNew) state.audioStreamer.updatePids(pids)
+    if (hasNew) streamer.updatePids(pids)
   }
 
   // Forward captured PCM to the relay on the shared stream socket via the yielding sender (audio must

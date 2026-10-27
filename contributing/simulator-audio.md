@@ -95,7 +95,8 @@ Zero bleed — sim B's capture stayed at exactly 0 the whole time sim A played. 
 | File | Role |
 |---|---|
 | `audiotap-helper/src/audiotap-helper.swift` | The tap helper: PIDs → process tap → aggregate → IOProc → Float32→S16/44100 → loopback TCP frames. Bidirectional socket (receives pid-set updates → rebuilds the tap), `kAudioHardwarePropertyProcessObjectList` listener (rebuild on audio start), separate control/IOProc queues, and a `--request-permission` priming mode. |
-| `ios-agent/src/AudioCaptureStreamer.ts` | `ensureHelperApp()` (mtime build + ad-hoc sign of the `.app`), `launchAudioHelper()` (`open -g`), `updatePids()` (push the tap set), the loopback TCP server → `ReadableStream<AudioFrame>`; plus `isAudioSupported()`, `readSimVolume()`, `applyGain()`, `requestAudioPermission()`. |
+| `audiotap-helper/src/index.ts` | `ensureHelperApp()` (mtime build + ad-hoc sign of the `.app`), `launchAudioHelper()` (`open -g`), `launchMuteOnlyTap()`, `isAudioSupported()`, `requestAudioPermission()`. |
+| `ios-agent/src/AudioCaptureStreamer.ts` | `updatePids()` (push the tap set), the loopback TCP server → `ReadableStream<AudioFrame>`; plus `readSimVolume()`, `applyGain()`, `parseAudioFrames()`. |
 | `ios-agent/src/SimProcessTree.ts` | `enumerateSimPids(udid)` — the sim's host PIDs via its `launchd_sim` descendant tree. |
 | `ios-agent/src/IOSAgent.ts` | Default-on (`TAPFLOW_AUDIO`≠`off`) + macOS-14.2 gate; boot-time whole-sim tap + 1.5s process-tree poll; per-session sim-volume gain; `pumpAudio` → `CODEC_AUDIO`. |
 | `cli/src/commands/{agent-start,start}.ts`, `lib/setup.ts` | prime the audio-capture TCC grant via `requestAudioPermission()` — `agent start` non-blocking (every start), `setup ios` blocking. |

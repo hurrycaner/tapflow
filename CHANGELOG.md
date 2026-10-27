@@ -7,10 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Apps an MCP client or a flow launches on iOS run without tapflow's network hook.** Identity-verification and bank-linking SDKs such as Plaid and Pinwheel treat the injected library as tampering and showed a blank screen; they now render normally and the UI tree lists their elements. The dashboard's offline toggle is unavailable on those sessions, and dashboard sessions are unchanged.
+
+## [0.30.0] - 2026-10-27
+
 ### Added
 
 - **An app can be launched with launch arguments and environment variables.** A flow writes `launchApp: { arguments: { FIRDebugEnabled: true, apiHost: staging.example.com } }`, and MCP's `launch_app` takes `arguments` and `env`, so a debug switch such as Firebase DebugView or a staging host no longer needs its own build. iOS passes arguments as `-key value`, which the app reads with `UserDefaults`; Android passes them as intent extras typed by value, which the app reads from its intent. `env` sets the app's environment on iOS and fails the step on Android. A launch with either restarts a running app so it reads them. Values the two platforms cannot both carry are refused when the flow loads: fractions, and keys written with iOS's leading `-`. Run records show argument values and mask env values. Upgrade the relay and the agents together with the CLI or MCP server: with an older one the launch fails rather than running without its arguments.
 - **Launch defaults per app in `tapflow.config.json`.** `launch.<bundle id>` gives an app `arguments` and `env` that every launch of it gets, from the dashboard's Launch button, MCP and flows alike, with `envFrom` reading a secret from `.env` by name. A launch's own values win key by key. Because defaults are launch arguments, the dashboard's Launch restarts a running app that has them. A device that cannot take a default launches without it and the relay logs a warning; run records name the defaults a launch applied. The relay refuses to start on an invalid entry or an `envFrom` variable that is not set.
+
+### Fixed
+
+- **Dragging on a device no longer stutters every second or two.** The agents paused the stream at a steady interval to read the Mac's memory and, on iOS with audio on, the simulator's processes; the pause was about 45 ms every 1.5 s on iOS. Those reads no longer hold up the stream.
 
 ## [0.29.0] - 2026-10-26
 
@@ -1097,7 +1107,8 @@ found out by waiting.
 
 - Automatic `tapflow.config.json` creation as a side effect of `tapflow start` / `tapflow relay start`.
 
-[Unreleased]: https://github.com/jo-duchan/tapflow/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/jo-duchan/tapflow/compare/v0.30.0...HEAD
+[0.30.0]: https://github.com/jo-duchan/tapflow/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/jo-duchan/tapflow/compare/v0.28.1...v0.29.0
 [0.28.1]: https://github.com/jo-duchan/tapflow/compare/v0.28.0...v0.28.1
 [0.28.0]: https://github.com/jo-duchan/tapflow/compare/v0.27.1...v0.28.0

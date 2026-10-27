@@ -13,10 +13,11 @@ status: stable
 ## The design
 
 `Platform` is `string`, not `'ios' | 'android'`. Each agent package self-registers at
-import time through `AgentRegistry.register(platform, AgentClass, { canRun })`. The
+import time through `AgentRegistry.register(platform, AgentClass, { connect, canRun })`. The
 registry answers two questions: `platforms()` (everything registered) and `available()`
-(those whose `canRun()` returns true or is undefined). The CLI drives startup from
-`available()` instead of `runIOS`/`runAndroid` branches.
+(those registered with a `connect` hook whose `canRun()` returns true or is undefined). The CLI drives startup from
+`available()` when no platform (or `all`) is named — a named one is checked against `platforms()` and
+started directly — instead of `runIOS`/`runAndroid` branches.
 
 Adding a platform is then: a new agent package plus one `register()` call. agent-core,
 relay, cli, and dashboard source stay untouched. That is the OCP payoff the whole shape

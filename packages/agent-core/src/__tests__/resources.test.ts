@@ -1,13 +1,42 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest'
 import os from 'os'
-
-// vi.hoisted로 mock 함수를 먼저 만들고, vi.mock에서 참조한다.
-// resources.ts가 `import { spawnSync } from 'child_process'`로 named import하므로
-// vi.spyOn 대신 모듈 전체를 교체해야 spy가 동작한다.
-const { spawnSyncMock } = vi.hoisted(() => ({ spawnSyncMock: vi.fn() }))
-vi.mock('child_process', () => ({ spawnSync: spawnSyncMock }))
+import fs from 'fs'
+import path from 'path'
 
 import { createResourceSampler } from '../utils/resources'
+
+// The two reads run real executables: stand-ins written here, so a test sees exactly what the agent's
+// event loop sees, including how long a slow one holds it.
+let dir: string
+const tool = (name: string, body: string) => {
+  const file = path.join(dir, name)
+  fs.writeFileSync(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+  return file
+}
+const VM_STAT_OUT = [
+  'Mach Virtual Memory Statistics: (page size of 16384 bytes)',
+  'Pages active:           100.',
+  'Pages wired down:        50.',
+  'Pages occupied by compressor:  25.',
+  'Pages free:             1000.',
+].join('\\n')
+
+/** The longest the event loop went without turning while `work` ran. The gap up to the moment `work` settles
+ *  counts too: a synchronous block that ends with `work` is over before any tick could see it. */
+async function longestLoopStall(work: () => Promise<unknown>): Promise<number> {
+  let last = performance.now()
+  let longest = 0
+  const tick = setInterval(() => {
+    const now = performance.now()
+    longest = Math.max(longest, now - last)
+    last = now
+  }, 5)
+  try { await work() } finally { clearInterval(tick) }
+  return Math.max(longest, performance.now() - last)
+}
+
+beforeAll(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resources-test-')) })
+afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
 
 describe('createResourceSampler', () => {
   afterEach(() => vi.restoreAllMocks())
@@ -85,74 +114,72 @@ describe('createResourceSampler', () => {
   })
 
   describe('getMemoryUsage', () => {
-    it('vm_stat 파싱 성공 시 active+wired+compressed 기반 memUsedMB 반환', () => {
+    it('vm_stat 파싱 성공 시 active+wired+compressed 기반 memUsedMB 반환', async () => {
       vi.spyOn(os, 'totalmem').mockReturnValue(16 * 1024 * 1024 * 1024)
-      spawnSyncMock.mockReturnValue({
-        stdout: [
-          'Mach Virtual Memory Statistics: (page size of 16384 bytes)',
-          'Pages active:           100.',
-          'Pages wired down:        50.',
-          'Pages occupied by compressor:  25.',
-          'Pages free:             1000.',
-        ].join('\n'),
-        status: 0,
-      })
+      const vmStat = tool('vm_stat_ok', `printf '${VM_STAT_OUT}\\n'`)
 
-      const { getMemoryUsage } = createResourceSampler()
-      const { memUsedMB, memTotalMB } = getMemoryUsage()
+      const { memUsedMB, memTotalMB } = await createResourceSampler({ vmStat }).getMemoryUsage()
 
-      // (100 + 50 + 25) × 16384 = 2,867,200 bytes → 2 MB (rounded)
+      // (100 + 50 + 25) × 16384 = 2,867,200 bytes → 3 MB (rounded)
       expect(memUsedMB).toBe(Math.round(175 * 16384 / 1024 / 1024))
       expect(memTotalMB).toBe(16 * 1024)
     })
 
-    it('vm_stat 실패(status≠0) 시 os.freemem() 기반 fallback 사용', () => {
+    it('vm_stat 실패(status≠0) 시 os.freemem() 기반 fallback 사용', async () => {
       vi.spyOn(os, 'totalmem').mockReturnValue(8 * 1024 * 1024 * 1024)
       vi.spyOn(os, 'freemem').mockReturnValue(2 * 1024 * 1024 * 1024)
-      spawnSyncMock.mockReturnValue({ stdout: '', status: 1 })
 
-      const { getMemoryUsage } = createResourceSampler()
-      const { memUsedMB, memTotalMB } = getMemoryUsage()
+      const { memUsedMB, memTotalMB } = await createResourceSampler({ vmStat: tool('vm_stat_fail', 'exit 1') }).getMemoryUsage()
 
       expect(memUsedMB).toBe(6 * 1024) // 8GB - 2GB = 6 GB = 6144 MB
       expect(memTotalMB).toBe(8 * 1024)
     })
 
-    it('vm_stat stdout이 비어있어도 fallback 사용', () => {
+    it('vm_stat stdout이 비어있어도 fallback 사용', async () => {
       vi.spyOn(os, 'totalmem').mockReturnValue(4 * 1024 * 1024 * 1024)
       vi.spyOn(os, 'freemem').mockReturnValue(1 * 1024 * 1024 * 1024)
-      spawnSyncMock.mockReturnValue({ stdout: '', status: 0 })
-
-      const { getMemoryUsage } = createResourceSampler()
-      const { memUsedMB } = getMemoryUsage()
+      const { memUsedMB } = await createResourceSampler({ vmStat: tool('vm_stat_empty', 'true') }).getMemoryUsage()
       expect(memUsedMB).toBe(3 * 1024) // 4GB - 1GB = 3 GB = 3072 MB
+    })
+
+    it('does not hold the event loop while vm_stat runs', async () => {
+      // 300 ms of vm_stat. Run synchronously, the loop would stall for all of it — the hitch a drag showed every 5 s.
+      const vmStat = tool('vm_stat_slow', `sleep 0.3; printf '${VM_STAT_OUT}\\n'`)
+      let reading: { memUsedMB: number } | undefined
+      const stall = await longestLoopStall(async () => { reading = await createResourceSampler({ vmStat }).getMemoryUsage() })
+      expect(reading?.memUsedMB).toBe(Math.round(175 * 16384 / 1024 / 1024))
+      expect(stall).toBeLessThan(100)
+    })
+
+    it('gives up on a vm_stat that hangs, and falls back', async () => {
+      vi.spyOn(os, 'totalmem').mockReturnValue(4 * 1024 * 1024 * 1024)
+      vi.spyOn(os, 'freemem').mockReturnValue(1 * 1024 * 1024 * 1024)
+      const started = Date.now()
+      const { memUsedMB } = await createResourceSampler({ vmStat: tool('vm_stat_hang', 'sleep 10') }).getMemoryUsage()
+      expect(memUsedMB).toBe(3 * 1024)
+      expect(Date.now() - started).toBeLessThan(3_000)
     })
   })
 
   describe('getMemoryPressure', () => {
-    it.each([['1', 'normal'], ['2', 'warn'], ['4', 'critical']])('reads level %s as %s on macOS', (raw, level) => {
+    it.each([['1', 'normal'], ['2', 'warn'], ['4', 'critical']])('reads level %s as %s on macOS', async (raw, level) => {
       vi.spyOn(os, 'platform').mockReturnValue('darwin')
-      spawnSyncMock.mockReturnValue({ stdout: `${raw}\n`, status: 0 })
-      expect(createResourceSampler().getMemoryPressure()).toBe(level)
-      expect(spawnSyncMock).toHaveBeenLastCalledWith('sysctl', ['-n', 'kern.memorystatus_vm_pressure_level'], { encoding: 'utf8', timeout: 1_000 })
+      // The stand-in echoes its arguments too, so the key it was asked for is checked.
+      const sysctl = tool(`sysctl_${raw}`, `[ "$*" = "-n kern.memorystatus_vm_pressure_level" ] && echo ${raw}`)
+      expect(await createResourceSampler({ sysctl }).getMemoryPressure()).toBe(level)
     })
 
-    it('gives no reading for a level it does not know, or when sysctl fails', () => {
+    it('gives no reading for a level it does not know, or when sysctl fails or is missing', async () => {
       vi.spyOn(os, 'platform').mockReturnValue('darwin')
-      spawnSyncMock.mockReturnValue({ stdout: '8\n', status: 0 })
-      expect(createResourceSampler().getMemoryPressure()).toBeUndefined()
-      spawnSyncMock.mockReturnValue({ stdout: '', status: 1 })
-      expect(createResourceSampler().getMemoryPressure()).toBeUndefined()
-      // spawnSync reports a missing binary through `error`, with no stdout at all.
-      spawnSyncMock.mockReturnValue({ stdout: null, status: null, error: new Error('ENOENT') })
-      expect(createResourceSampler().getMemoryPressure()).toBeUndefined()
+      expect(await createResourceSampler({ sysctl: tool('sysctl_8', 'echo 8') }).getMemoryPressure()).toBeUndefined()
+      expect(await createResourceSampler({ sysctl: tool('sysctl_fail', 'exit 1') }).getMemoryPressure()).toBeUndefined()
+      expect(await createResourceSampler({ sysctl: path.join(dir, 'no-such-tool') }).getMemoryPressure()).toBeUndefined()
     })
 
-    it('does not ask outside macOS, where the key does not exist', () => {
+    it('does not ask outside macOS, where the key does not exist', async () => {
       vi.spyOn(os, 'platform').mockReturnValue('linux')
-      spawnSyncMock.mockClear()
-      expect(createResourceSampler().getMemoryPressure()).toBeUndefined()
-      expect(spawnSyncMock).not.toHaveBeenCalled()
+      // A stand-in that would answer if asked: the undefined has to come from not asking.
+      expect(await createResourceSampler({ sysctl: tool('sysctl_would_answer', 'echo 1') }).getMemoryPressure()).toBeUndefined()
     })
   })
 })

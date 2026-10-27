@@ -48,7 +48,7 @@ Open the dashboard with `?perf=1` (or toggle `Ctrl+Shift+P`). **DEV-build only**
 
 | Tag | Example | Source | Meaning |
 |---|---|---|---|
-| `[decoder]` | `[decoder] using WebCodecs` | `useDecoderStream.ts` | Which decoder tier was selected (WebCodecs / WASM / MSE / JPEG). |
+| `[decoder]` | `[decoder] using WebCodecs` | `useDecoderStream.ts` | Which decoder tier was selected (WebCodecs / WASM). |
 | `[wc-diag]` | `[wc-diag] decodeMs=8.7 queueSize=0` | `useDecoderStream.ts` | WebCodecs decode time + queue depth, sampled every 30 frames. |
 | `[sps-vui]` | `[sps-vui] {"maxNumReorderFrames":0,...}` | `WebCodecsCore.ts` | Parsed H.264 SPS VUI — confirms the agent's `reorder=0` rewrite reached the browser. |
 | `[latency]` | `[latency] {"decodeMs":{"p50":8,"p95":18},...}` | `MetricsPanel.tsx` | The JSON summary printed by `Log latency summary`. |
@@ -57,11 +57,10 @@ Open the dashboard with `?perf=1` (or toggle `Ctrl+Shift+P`). **DEV-build only**
 
 ```text
 http://localhost:3001?perf=1                 # auto-select (localhost = WebCodecs)
-http://localhost:3001?perf=1&decoder=mse     # force MSE (the LAN tier)
 http://localhost:3001?perf=1&decoder=wasm    # force tinyh264 (plain-HTTP LAN tier)
 ```
 
-MSE **buffers** rather than dropping, so the submit↔present FIFO tracker is accurate 1:1 even without WebCodecs's timestamp matching. iOS only — AndroidViewer has no `?decoder=` override.
+`wasm` is the only value honoured — there is no MSE tier any more (`pickDecoder.ts`). Both viewers go through `useDecoderStream`, so the override applies on iOS and Android alike.
 
 ---
 

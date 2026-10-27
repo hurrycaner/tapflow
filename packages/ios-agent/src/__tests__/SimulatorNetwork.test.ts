@@ -147,6 +147,7 @@ describe('SimulatorNetwork', () => {
   let simctl: {
     setStatusBarOffline: (udid: string, offline: boolean) => Promise<void>
     setSimulatorEnv: (udid: string, name: string, value: string) => Promise<void>
+    unsetSimulatorEnv: (udid: string, name: string) => Promise<void>
   }
 
   /**
@@ -202,6 +203,7 @@ describe('SimulatorNetwork', () => {
       setSimulatorEnv: vi.fn(async (udid: string, name: string, value: string) => {
         env.push(`${udid}:${name}=${value}`)
       }),
+      unsetSimulatorEnv: vi.fn(async () => {}),
       setStatusBarOffline: vi.fn(async (udid: string, offline: boolean) => {
         // Appended to the same log as the filter rule so the ORDER between layers is observable —
         // that ordering is this class's actual contract, not an implementation detail.
@@ -392,6 +394,82 @@ describe('SimulatorNetwork', () => {
     // Never armed: the remedy is a reboot, which is what this reason prescribes.
     const net = make()
     expect(net.state(UDID)).toEqual({ offline: false, available: false, reason: 'not-armed' })
+  })
+
+  describe('disarm', () => {
+    it('answers not-armed, unsets the variable, removes the filter rule and clears the condition', async () => {
+      const net = make()
+      await net.arm(UDID)
+      await net.disarm(UDID)
+
+      expect(net.state(UDID)).toEqual({ offline: false, available: false, reason: 'not-armed' })
+      expect(simctl.unsetSimulatorEnv).toHaveBeenCalledWith(UDID, 'DYLD_INSERT_LIBRARIES')
+      expect(argv()).toContain(`--remove ${UDID}`)
+      expect(existsSync(conditionPath(UDID))).toBe(false)
+    })
+
+    it('keeps filter-unavailable ahead of not-armed when the container app is missing', async () => {
+      const net = make(join(dir, 'does-not-exist'))
+      await net.disarm(UDID)
+      // The verdict is only ever recorded by a toggle (disarm clears it, like forget), so the
+      // precedence is observed on the next toggle attempt against the missing host.
+      await net.setOffline(UDID, true)
+      expect(net.state(UDID)).toEqual({ offline: false, available: false, reason: 'filter-unavailable' })
+    })
+
+    it('rejects with the unsetenv error but has already cleared memory so state() says not-armed', async () => {
+      const net = make()
+      await net.arm(UDID)
+      vi.mocked(simctl.unsetSimulatorEnv).mockRejectedValueOnce(new Error('launchctl failed'))
+
+      await expect(net.disarm(UDID)).rejects.toThrow('launchctl failed')
+      expect(net.state(UDID)).toEqual({ offline: false, available: false, reason: 'not-armed' })
+    })
+
+    it('takes an offline device back online without reporting enforcement-lost', async () => {
+      armed()
+      const net = make()
+      await net.setOffline(UDID, true)
+      await net.disarm(UDID)
+
+      const s = net.state(UDID)
+      expect(s.offline).toBe(false)
+      expect(s).not.toMatchObject({ reason: 'enforcement-lost' })
+    })
+
+    it('stays not-armed after a launch past the verdict deadline, never awaiting-app or hooks-not-installed', async () => {
+      vi.useFakeTimers()
+      const net = make()
+      await net.arm(UDID)
+      await net.disarm(UDID)
+      await net.target(UDID, 'com.example.app')
+      net.markLaunched(UDID, 4242)
+      vi.advanceTimersByTime(LAUNCH_VERDICT_DEADLINE_MS + 1)
+
+      expect(net.state(UDID)).toEqual({ offline: false, available: false, reason: 'not-armed' })
+    })
+
+    it('removes a verdict left by a hooked app so state() cannot answer available', async () => {
+      const net = make()
+      await net.arm(UDID)
+      armed()
+      expect(net.state(UDID)).toMatchObject({ available: true })
+
+      await net.disarm(UDID)
+
+      expect(existsSync(verdictPath(UDID))).toBe(false)
+      expect(net.state(UDID)).toMatchObject({ available: false })
+    })
+
+    it('lets arm after disarm set DYLD_INSERT_LIBRARIES again', async () => {
+      const net = make()
+      await net.arm(UDID)
+      await net.disarm(UDID)
+      vi.mocked(simctl.setSimulatorEnv).mockClear()
+      await net.arm(UDID)
+
+      expect(simctl.setSimulatorEnv).toHaveBeenCalledWith(UDID, 'DYLD_INSERT_LIBRARIES', hookPath())
+    })
   })
 
   it('says awaiting-app once the injection is in place but no app has run', async () => {

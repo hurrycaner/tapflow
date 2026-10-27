@@ -38,7 +38,7 @@ iOS build format: `.app.zip` **or** `.tar.gz`/`.tgz` (EAS `eas build` simulator 
 
   **The role and direction are settled before the shape is, and the order is load-bearing.** A malformed frame is dropped, but an agent-only type a browser spoofed *badly* must still close the socket — gating after shape validation lets such a spoofer keep its connection. The direction is a fact about the `type` alone, which is known even when the payload is not. A failed handshake is the one exception: it confers no role, so an agent whose `agent:register` does not parse gets its frame dropped rather than a `Forbidden` close, and its next attempt still introduces it.
 - JSON messages and binary frames share the same WebSocket connection, branched by the `isBinary` flag.
-- Control message protocol: `input:touch:*`, `input:pinch:*`, `input:button`, `input:key`, `input:type`, `input:rotate`, `input:keyboard:toggle`, `device:boot`, `device:shutdown`, `session:start`, `session:end`, `clipboard:read`, `clipboard:write`, `watch:start`, `watch:stop`.
+- Control message protocol: `input:touch:*`, `input:pinch:*`, `input:button`, `input:key`, `input:type`, `input:rotate`, `input:posture`, `input:keyboard:toggle`, `device:boot`, `device:lease`, `device:shutdown`, `session:start`, `session:leave`, `session:end`, `session:activity`, `clipboard:read`, `clipboard:write`, `network:set`, `watch:start`, `watch:stop`, `agents:list` — the authority is `BrowserToRelay`, not this line.
 - **The message shapes live in [`@tapflowio/protocol`](../protocol/AGENTS.md), not here.** Every message the relay *originates* goes through `sendTo(socket, msg: RelayOutbound)`, so adding one means adding it to that union first — the compiler will not let you do it in the other order. **Inbound frames are parsed into a discriminated union at the door** (`parseInbound`), not cast — see the header of `protocol/src/validate/`. Which frame gets forwarded differs by direction and is checked by `scripts/__tests__/browserInboundRouting.test.mjs`:
 
   - **agent → browser: the original frame (`raw`).** `z.object` strips undeclared keys, so forwarding the parse product would delete a field a newer agent added — the one direction where the sender is the more recently updated side.
@@ -69,9 +69,9 @@ iOS build format: `.app.zip` **or** `.tar.gz`/`.tgz` (EAS `eas build` simulator 
   `channel-unavailable` for both because the set is derived from what a consumer must *do* differently
   and both want a reconnect or a re-join; the machine field was right for both while the prose was
   wrong for one, which is the concrete case for reading `reason` rather than `message` (#492).
-  **Everything else gets nothing, and that is the contract**: opening and move frames, `input:rotate` and
-  `input:keyboard:toggle` have no waiter, so a reply would be one nobody is listening for.
-  The eleven `input:*` cases are **two clauses**, split by whether an ack answers them, and the split is
+  **Everything else gets nothing, and that is the contract**: opening and move frames, `input:rotate`,
+  `input:posture` and `input:keyboard:toggle` have no waiter, so a reply would be one nobody is listening for.
+  The twelve `input:*` cases are **two clauses**, split by whether an ack answers them, and the split is
   load-bearing rather than tidy — the correlator gate belongs on the answered five, and written into the
   shared body it would have dropped every opening and move frame with it.
 - **A browser-role command is acted on only from the client the session is bound to** — one client's several sockets are one holder, which is what a browser tab needs and what a socket could not express. The mirror of the
@@ -114,6 +114,8 @@ iOS build format: `.app.zip` **or** `.tar.gz`/`.tgz` (EAS `eas build` simulator 
   (#542). Splitting the resolver rather than inlining two checks is what makes closing #527 a one-line
   move to `dispatchTarget`; the cost, written down rather than waved past, is that a non-owner now learns
   whether a session id exists — small against being able to shut that device down, which it still can.
+  `app:launch` and `open-url` are stamped `automation` from the holder's kind the same way a boot is (`isAiClientKind`): the iOS
+  agent disarms its network hook for automation launches and deep links, and an MCP client on an already-booted device never boots.
   The app-command handlers check ownership **after** the session lookup and **before** the build lookup,
   deliberately not through `dispatchTarget`: that resolver also decides agent liveness, and using it there
   would move `agent offline` ahead of `Build not found`, changing which of two simultaneous problems the
@@ -128,7 +130,8 @@ iOS build format: `.app.zip` **or** `.tar.gz`/`.tgz` (EAS `eas build` simulator 
     is unheld, which is exactly the holder's reconnect grace, so a watching socket is refused `device:shutdown`
     and `session:start` for the session it watches before the usual gates run.
   - **What reaches a watcher is an allowlist**: video frames (not audio), the device's description (chrome,
-    device info, postures, booting, ready) and the lifecycle (agent away, rebound, holder left, ended). Every
+    device info, postures, booting, ready) and the lifecycle (agent away, rebound, holder left, ended), and what the holder just did (`watch:action`,
+    built by the relay from the commands it passed on). Every
     reply to something the holder asked — acks, clipboard, network state — stays the holder's.
   - **One keyframe-aware sender per watcher, and a watcher's drop asks for no IDR.** The sender's drop state
     lives in its closure, so a shared one would let a slow watcher push the holder into drop-to-keyframe; and

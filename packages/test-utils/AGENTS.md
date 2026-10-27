@@ -49,12 +49,13 @@ expect(await waitForTypeOrNull(ws, 'device:ready', 0)).toBeNull()
 
 Two sockets have no ordering between them — an agent's `device:ready` and a browser's `session:start` can be handled in either order. A test that depends on one preceding the other needs `barrier` on the **sending** socket.
 
-### Narrowing is available but unused
+### Narrowing is checked now, and still mostly unused
 
-`waitForType<RelayMessage>(…)` works. Almost nothing does it, because every package excludes
-`src/__tests__` from `tsc` — a test file's types are stripped, never checked — so the narrowing
-would be decorative. The parameter exists so that bringing tests under `tsc` is a config change
-rather than a rewrite.
+`waitForType<DeviceReady>(…)` works, and since #422 it is checked: every package whose build tsconfig
+excludes `src/__tests__` carries `src/__tests__/tsconfig.json`, wired into its `typecheck`. Most call
+sites still pass nothing, a habit from when the folders sat outside every project rather than a
+constraint. The constraint is `T extends SocketMessageLike` (`{ type: string }`) with `SocketMessage` as
+the default.
 
 ## HOW NOT
 

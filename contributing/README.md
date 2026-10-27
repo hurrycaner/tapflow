@@ -121,6 +121,7 @@ Named imperatively from `AGENTS.md` — these describe a gate you are about to h
 | [monorepo-project-references.md](./monorepo-project-references.md) | rationale | monorepo, typescript, build |
 | [runtime-platform-registration.md](./runtime-platform-registration.md) | rationale | agent-core, architecture, extensibility |
 | [agent-keep-awake.md](./agent-keep-awake.md) | rationale | macos, performance, power |
+| [agent-event-loop-blocking.md](./agent-event-loop-blocking.md) | diagnosis | performance, streaming, agent-core, measurement |
 | [simulator-boot-contention.md](./simulator-boot-contention.md) | diagnosis | performance, capacity, resource-management, ios, android |
 
 ### Beyond the code

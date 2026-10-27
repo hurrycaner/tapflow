@@ -36,7 +36,7 @@ The audience is the whole team (PO, PM, designers, backend, QA) — not just QA.
 
 - **Stack**: Vite + React 19 + React Router v7 + Shadcn/Tailwind + next-themes
 - **Structure**: `src/` — app entry, router, pages; `components/` — shared components; `hooks/` — custom hooks; `lib/` — utils, types, API client
-- **Routing**: `BrowserRouter`-based. `/login` and `/invite` are public. Everything else is protected by `DashboardLayout` via `useAuth` (redirects to `/login`).
+- **Routing**: `BrowserRouter`-based. Four routes are public — `/login`, `/setup`, `/invite`, `/reset-password` — because each is reached by somebody with no session yet. Every other declared route is protected by `DashboardLayout` via `useAuth` (redirects to `/login`); the `*` `NotFound` route sits outside it.
 - **Auth**: Session confirmed via `GET /api/v1/auth/me`. HttpOnly cookie (not readable from JS).
 - **Streaming**: set `binaryType = 'arraybuffer'` in `useRelay`, branch on `e.data instanceof ArrayBuffer` for binary frames.
 - **Message shapes live in [`@tapflowio/protocol`](../protocol/AGENTS.md)**, imported with `import type` so nothing lands in the bundle. `send()` takes `BrowserToRelay`, so a new outbound message has to be added to that union first. What the viewer *receives* is **`BrowserInbound`**, re-exported from `lib/types.ts` so view code keeps one import site.
@@ -121,7 +121,7 @@ what the build itself loads, and `vitest.config.ts` keeps exactly the coverage i
 linted, not type-checked.
 
 **Stop adding `useCallback` and `useMemo` for identity.** The compiler does that. What is here, in
-product code (`src`/`components`/`hooks`/`lib` minus `__tests__`): 62 `useCallback`, 3 `useMemo`, and
+product code (`src`/`components`/`hooks`/`lib` minus `__tests__`): 66 `useCallback` (2026-10-27), 3 `useMemo`, and
 **zero** `memo()` components — so most of that is stabilising effect dependencies by hand. Existing ones are not worth a sweep; new ones need a reason that is not
 "so the child does not re-render".
 
@@ -371,7 +371,7 @@ device**, not by how the feature is built:
 | Group | What belongs in it | Today |
 |---|---|---|
 | **Navigation** | Move around the app or the OS. Press it and it is over. | launch, home, back, recent apps, deeplink |
-| **Device** | Leave the device in a condition that stays until somebody changes it back. | software keyboard, volume, sleep, rotate, restart |
+| **Device** | Leave the device in a condition that stays until somebody changes it back. | software keyboard, volume, sleep, rotate, fold, restart |
 | **Capture** | Take the current state out of the session. | screenshot, recording |
 | **Environment** | Change what the device is sitting in. | network on/off |
 
@@ -419,8 +419,7 @@ turning up wherever the array happened to put it.
 
 ### When a group gets too long
 
-Nothing is collapsed today: iOS shows eight buttons and Android twelve, which a vertical toolbar
-still carries. The point to reconsider is when a single group needs more than about four — that is
+Nothing is collapsed today; a vertical toolbar still carries every button. The point to reconsider is when a single group needs more than about four — that is
 when its low-frequency members should move behind a popover and the frequent ones stay on the
 surface, rather than the toolbar growing until it runs off the screen.
 
@@ -429,9 +428,10 @@ back, recent apps, deeplink. So the threshold is crossed rather than approaching
 Navigation that crossed it — not Environment, which is the group whose *future* members (location,
 battery, appearance, locale, time zone, permissions) make it the one to watch next.
 
-**And Device followed it**: the restart (#628) takes Android's Device group to four and iOS's to
-three. Both are at the threshold rather than over it, so nothing moves yet — but the next button
-either platform adds to Device is the one that should arrive with a popover rather than a slot.
+**And Device followed it**: the restart (#628) took Android's Device group to four and iOS's to
+three, and the fold toggle (Android foldables only) takes Android's to five — over the threshold on
+that device. iOS's is still at three, so the threshold is a per-platform question, and Android's
+Device group is the one that should get a popover before anything else is added to it.
 
 ## HOW NOT
 

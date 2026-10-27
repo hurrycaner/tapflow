@@ -251,6 +251,7 @@ type FilterVerdict = 'unavailable' | 'lost'
 interface SimctlForNetwork {
   setStatusBarOffline(udid: string, offline: boolean): Promise<void>
   setSimulatorEnv(udid: string, name: string, value: string): Promise<void>
+  unsetSimulatorEnv(udid: string, name: string): Promise<void>
 }
 
 export class SimulatorNetwork {
@@ -414,6 +415,34 @@ export class SimulatorNetwork {
     // whose remedy is to launch one, which would never help.
     await this.simctl.setSimulatorEnv(udid, 'DYLD_INSERT_LIBRARIES', this.dylib)
     this.armed.add(udid)
+  }
+
+  /**
+   * Run a device with NO injected library, and make `state()` say so.
+   *
+   * Fintech SDKs (Plaid, Pinwheel) read `DYLD_INSERT_LIBRARIES` in the app's environment as a
+   * tampering signal and render a blank WebView, so an automation session has to launch its app
+   * unhooked. `arm()` sets that variable for the whole simulator, which is why the opposite call is
+   * needed and not merely "do not arm".
+   *
+   * Three things, because each covers what the others cannot. `forgetLocked` clears the memory and
+   * the filter rule, so nothing here is duplicated from it. The verdict file is removed on top
+   * because `forgetLocked` leaves it: a verdict written by a previously hooked app would otherwise
+   * be read by `state()` before `armed` is consulted and answer `available: true` for a device that
+   * has no hooks. `launchctl unsetenv` is what actually takes the variable out of the next launch.
+   *
+   * **Memory first, unsetenv last.** If unsetenv throws, the caller warns and carries on, and
+   * `state()` must already be answering `not-armed` rather than something that was true of the
+   * hooked session.
+   */
+  async disarm(udid: string): Promise<void> {
+    return this.serialize(() => this.disarmLocked(udid))
+  }
+
+  private async disarmLocked(udid: string): Promise<void> {
+    await this.forgetLocked(udid)
+    rmSync(this.verdictPath(udid), { force: true })
+    await this.simctl.unsetSimulatorEnv(udid, 'DYLD_INSERT_LIBRARIES')
   }
 
   /**
@@ -820,7 +849,8 @@ export class SimulatorNetwork {
     // the device as armed whatever the file's state — it sets the environment and does not read the
     // path it sets — so the branch below fell to `awaiting-app`: "launch an app through tapflow", to
     // a tester who has already launched one, for the life of the session. (`not-armed` and its
-    // reboot only appear when this process restarted, since `armed` is its memory.)
+    // reboot appear when this process restarted, since `armed` is its memory, and on an automation
+    // session, which disarms on purpose.)
     //
     // Read rather than remembered, unlike layer 1 above. Layer 1 is a question this synchronous
     // method cannot put to the provider; this one is a `stat`, and a `node_modules` emptied under a
@@ -832,7 +862,7 @@ export class SimulatorNetwork {
     // The three answers differ by what the tester has to do, which is what the reason set is for.
     // An absent verdict means two different things and they were reported as one: nothing was
     // delivered (reboot), or it was delivered and no app has exercised it yet (launch one). The
-    // second is what every iOS session looks like before its app starts, so folding it into
+    // second is what every dashboard iOS session looks like before its app starts, so folding it into
     // `not-armed` put the wrong remedy on the common case.
     if (verdict === 'missing') {
       if (!this.armed.has(udid)) return { offline, available: false, reason: 'not-armed' }
@@ -1231,7 +1261,7 @@ export class SimulatorNetwork {
    *
    * This used to write `[...this.offline]` — the whole set — and the host replaced the rule with it.
    * The rule is host-wide, so that made every run an assertion about devices this agent had never
-   * heard of: a second agent starting knows of no offline device, and `arm()` runs on every device
+   * heard of: a second agent starting knows of no offline device, and `arm()` or `disarm()` runs on every device
    * boot, so **starting one put every device the other had taken offline back online**, silently,
    * while its tester watched an offline control over working traffic.
    *

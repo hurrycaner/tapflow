@@ -60,7 +60,8 @@ brew install --cask android-commandlinetools # 2) bootstrap sdkmanager (/opt/hom
 # 3) self-contained SDK — putting cmdline-tools inside the SDK is what resolves split paths
 yes | sdkmanager --sdk_root="$HOME/Library/Android/sdk" --licenses
 sdkmanager --sdk_root="$HOME/Library/Android/sdk" \
-  "cmdline-tools;latest" "platform-tools" "emulator" "system-images;android-35;google_apis;arm64-v8a"
+  "cmdline-tools;latest" "platform-tools" "emulator" "system-images;android-35;google_apis;arm64-v8a" \
+  "build-tools;35.0.0"   # carries aapt, which apk metadata extraction needs
 # 4) from here every command uses the SDK-internal binary (SDK root auto-detected)
 "$HOME/Library/Android/sdk/cmdline-tools/latest/bin/avdmanager" create avd \
   -n tapflow-phone -k "system-images;android-35;google_apis;arm64-v8a" -d pixel_7 --force <<< "no"

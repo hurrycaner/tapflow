@@ -21,10 +21,10 @@ instead of only the three browser-side hops.
 Offset  Size  Type       Field
 0       4     bytes      magic = [0x54, 0x46, 0x46, 0x45]  ('TFFE')
 4       1     uint8      version = 1
-5       1     uint8      flags (reserved, 0)
+5       1     uint8      flags — bit2 PCM audio (wins over bit0), bit0 H.264 (else JPEG), bit1 H.264 keyframe (IDR)
 6       8     uint64 BE  capturedAt — agent capture time (ms since epoch)
 14      8     uint64 BE  relayedAt  — relay forward time (ms since epoch, patched in place)
-22      ...   bytes      payload (JPEG or H.264)
+22      ...   bytes      payload (JPEG, H.264 or PCM audio)
 ```
 
 The agent writes the header and `capturedAt` before sending; the relay patches `relayedAt`

@@ -61,6 +61,7 @@ Committed *why* behind non-obvious decisions. Read the relevant one **before** c
 | [android-foldable-touch-coordinates.md](./contributing/android-foldable-touch-coordinates.md) | diagnosis | Why a folded foldable's taps miss — the divisor is the emulator's display, not the guest's panel |
 | [ios-device-recovery.md](./contributing/ios-device-recovery.md) | rationale | Why `tapflow start` does not pre-boot iOS, and where zombie-simulator recovery lives |
 | [agent-keep-awake.md](./contributing/agent-keep-awake.md) | rationale | Why the agent holds a `caffeinate` assertion during a session — idle throttle drops the emulator to ~4-5 fps |
+| [agent-event-loop-blocking.md](./contributing/agent-event-loop-blocking.md) | diagnosis | Why the agents never run a child process synchronously on a timer — a stream that stutters at a steady interval, and how to find the call |
 | [relay-heartbeat.md](./contributing/relay-heartbeat.md) | rationale | Why the relay runs a ping/pong heartbeat — dead sockets otherwise linger to the TCP timeout |
 | [relay-resource-rejection.md](./contributing/relay-resource-rejection.md) | rationale | Why the relay rejects new sessions above a CPU/RAM threshold, evaluated relay-side |
 | [relay-backpressure-frame-drop.md](./contributing/relay-backpressure-frame-drop.md) | rationale | Why the relay silently drops frames on `bufferedAmount` backpressure — bounds memory |

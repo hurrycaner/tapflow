@@ -61,9 +61,9 @@ On iOS, `acceptH264 === false` makes `useH264` false → the agent streams JPEG 
 ## 4. Why Android has no equivalent fallback
 
 - `acceptH264` is **only consumed by `ios-agent`** — `android-agent` ignores it entirely and always streams H.264.
-- `AndroidViewer` has **no `onJpegFrame` handler** (it's commented "Android is H.264-only, so no JPEG handler"); `onJpegFrame` is documented "iOS-only" in `useDecoderStream`. This is harmless: since the Android agent never emits JPEG, no JPEG frame ever reaches the viewer.
-- When `pickDecoder()` returns `null` (no WebGL2), `AndroidViewer` shows an unsupported message instead of a stream:
-  > 이 환경에서는 스트리밍을 표시할 수 없습니다. Chrome/Edge 또는 HTTPS 환경에서 다시 시도해 주세요.
+- The Android screen hook (`useAndroidScreen`) has **no `onJpegFrame` handler** (it's commented "Android is H.264-only, so no JPEG handler"); `onJpegFrame` is documented "iOS-only" in `useDecoderStream`. This is harmless: since the Android agent never emits JPEG, no JPEG frame ever reaches the viewer.
+- When `pickDecoder()` returns `null` (no WebGL2), the viewer shows an unsupported message instead of a stream (`SimulatorInfoCard`, and `WatchedDevice` for a watched session):
+  > Streaming is not supported in this environment.
 
 So on the ~5% browsers: **iOS keeps streaming via JPEG; Android shows the unsupported notice.** That is the entire user-visible asymmetry.
 
@@ -86,6 +86,6 @@ Both are net-negative. The JPEG fallback is a near-zero-cost asset iOS already o
 - `packages/dashboard/lib/decoders/pickDecoder.ts` — `canDecodeH264()` / `pickDecoder()` (the ~5% floor)
 - `packages/dashboard/hooks/useDecoderStream.ts` — `onJpegFrame` ("iOS-only"), `onUnsupported`
 - `packages/dashboard/hooks/useIOSScreen.ts` — JPEG render path (`createImageBitmap`)
-- `packages/dashboard/components/device/AndroidViewer.tsx` — no JPEG handler; unsupported notice
+- `packages/dashboard/hooks/useAndroidScreen.ts` — no JPEG handler; `components/device/shared/SimulatorInfoCard.tsx` — unsupported notice
 - `packages/ios-agent/src/IOSAgent.ts` — `envAllowsH264` / `useH264` / `acceptH264`
 - `packages/ios-agent/AGENTS.md` — `TAPFLOW_IOS_CODEC` env documentation

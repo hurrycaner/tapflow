@@ -41,7 +41,7 @@ Each command has exactly one responsibility. `tapflow start` is for local develo
 
 - UX standard: one-line input → progress feedback → result message. Use spinners and banners for visual feedback (`print.ts`: `banner`, `step`, `warn`, `createSpinner`). Interactive prompts use `@clack/prompts`.
 - `tapflow.config.json` lives in the install dir (created by `tapflow init`); runtime data goes in `<install>/data` on a new install, or the `.tapflow/data` / `.tapflow-data` an existing one already has. Downloaded tunnel binaries are cached in `~/.tapflow/bin`.
-- Package dependencies: `@tapflowio/agent-core`, `@tapflowio/ios-agent`, `@tapflowio/android-agent`, `@tapflowio/relay`. Import as libraries — do not reimplement.
+- Package dependencies: `@tapflowio/agent-core`, `@tapflowio/ios-agent`, `@tapflowio/android-agent`, `@tapflowio/relay`, `@tapflowio/flow-runner`. Import as libraries — do not reimplement.
 
 ## HOW NOT
 

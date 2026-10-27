@@ -1,5 +1,30 @@
 # @tapflowio/ios-agent
 
+## 0.30.0
+
+### Minor Changes
+
+- 724835d: An app can be launched with launch arguments and, on iOS, environment variables (#1047). A flow writes `launchApp: { arguments, env }`, and MCP's `launch_app` takes the same two inputs. Arguments are a map of strings, whole numbers, booleans and lists of strings: iOS receives them as `-key value` after the bundle id, which `UserDefaults` reads, and Android as intent extras typed by value. `env` reaches the app's process on iOS and is refused on Android, which has no such channel. A launch carrying either restarts a running app, since a running process has already read its arguments.
+
+  Nothing is dropped silently. One check in `@tapflowio/protocol/launch` refuses the same keys and values at flow load, at the MCP tool, at the relay and at the agent: fractions, keys written with their iOS dash, environment names tapflow's network hook depends on, and launches longer than 8,192 characters. The relay advertises `launch-options` in `agents:listed.features` and refuses arguments for an agent without the `launch-options` capability; clients check the feature before sending, and fail a launch whose `app:launch-done` does not name the applied keys. Run records show argument values and mask env values.
+
+- d5432ce: An app can have launch defaults in `tapflow.config.json` (#1047): `launch.<bundle id>` with `arguments`, `env`, and `envFrom`, which reads an environment value from another variable by name so a secret stays in `.env`. The relay merges them into every `app:launch` for that app (the dashboard's Launch button, MCP `launch_app`, a flow's `launchApp`), key by key with the caller's values winning. An invalid entry, an unset `envFrom` variable, or one naming the relay's own secrets stops the relay from starting; only the commands that start a relay read the section, so `tapflow doctor` and the agent are unaffected.
+
+  Defaults a device cannot take are left out with a warning rather than failing the launch: env on an agent without the new `launch-env` capability (only iOS has it), everything on an agent without `launch-options`. A launch carrying only defaults is marked `defaultsOnly` to the agent, and Android launches without them when no single launcher activity resolves. `app:launch-done.applied` names what reached the app; `RelayClient.launchApp` and `TapflowClient.launchApp` return it, `FlowDriver.launchApp` may resolve to it, run records append the defaults' keys to the `launchApp` step, and MCP's `launch_app` result carries it.
+
+### Patch Changes
+
+- 16c78be: A drag on a device no longer stutters at a steady interval. The agents ran four child processes synchronously on timers, on the event loop that forwards every video frame and touch: the iOS agent's audio poll (`ps` and `plutil`, about 45 ms every 1.5 s) and both agents' resource report (`vm_stat` and `sysctl`, every 5 s). They run asynchronously now, by absolute path and with timeouts, so the stream keeps moving while they do.
+
+  `createResourceSampler()` in `@tapflowio/agent-core/utils` changes with it: `getMemoryUsage()` and `getMemoryPressure()` return promises, and the function takes optional paths for the two tools. Only the agents call it.
+
+- Updated dependencies [16c78be]
+- Updated dependencies [724835d]
+- Updated dependencies [d5432ce]
+  - @tapflowio/agent-core@0.30.0
+  - @tapflowio/protocol@0.30.0
+  - @tapflowio/audiotap-helper@0.3.15
+
 ## 0.29.0
 
 ### Minor Changes
@@ -12,7 +37,6 @@
 ### Patch Changes
 
 - fe644c9: `device:ready` carries an optional `payload.cold`: whether this boot brought the device up, as opposed to finding it already running. Both agents report it. The relay's per-host boot gate, in this release, charges a boot by it. Absent means unknown, never `false`.
-
 
 - 17aa45f: A tap from a flow or an AI agent on iOS now lasts at least 50ms. Clients send the touch's down and up back to back, and a `UISwitch` ignored most such taps (3 of 20 toggled on iOS 26.5, 20 of 20 with the hold); the agent now holds the up back until the touch has lasted that long, and acks the tap once the up is written. A person's tap and a swipe usually last longer already, so they are rarely held, and one that is held only gains contact time.
 - 0d4a09c: The iOS UI tree reads a text field's identifier and a selected element's label correctly. A field with placeholder text reported an identifier with the placeholder glued on (`email', placeholderValue: 'Email`), so a flow or MCP selector naming it by `id` never matched; a selected tab reported an empty label, so it could not be found by its text once chosen.

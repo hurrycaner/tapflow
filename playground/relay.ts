@@ -1,5 +1,5 @@
 import path from 'path'
-import { RelayServer, initDb, config } from '@tapflowio/relay'
+import { RelayServer, initDb, config, loadLaunchDefaults } from '@tapflowio/relay'
 
 const PORT = Number(process.env.PORT ?? 4000)
 // The directory the relay's config resolved, the one `tapflow start` uses. A path built here from
@@ -9,9 +9,14 @@ const { dataDir } = config.local
 
 initDb(path.join(dataDir, 'tapflow.db'))
 
+// Read here as `tapflow start` reads it, after the DB and before the server: an invalid `launch` section stops
+// the dev relay the way it stops a real one.
+const launchDefaults = loadLaunchDefaults()
+
 const server = new RelayServer({
   port: PORT,
   uploadsDir: path.join(dataDir, 'uploads'),
+  launchDefaults,
 })
 
 server.start()

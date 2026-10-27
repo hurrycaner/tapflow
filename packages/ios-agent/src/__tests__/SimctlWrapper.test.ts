@@ -132,6 +132,17 @@ describe('SimctlWrapper', () => {
     })
   })
 
+  describe('unsetSimulatorEnv', () => {
+    it('removes the variable with launchctl unsetenv, not setenv', async () => {
+      const runner = mockRunner()
+      await expect(
+        new SimctlWrapper(runner).unsetSimulatorEnv('device-1', 'DYLD_INSERT_LIBRARIES'),
+      ).resolves.toBeUndefined()
+      expect(runner.exec).toHaveBeenCalledTimes(1)
+      expect(runner.exec).toHaveBeenCalledWith('spawn', 'device-1', 'launchctl', 'unsetenv', 'DYLD_INSERT_LIBRARIES')
+    })
+  })
+
   describe('waitUntilBooted', () => {
     // One `list` reading per call, walking the script in order and holding on the last — the shape a
     // real boot has. `mockRunner` answers every `list` identically, which cannot express a transition.

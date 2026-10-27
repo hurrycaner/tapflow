@@ -396,7 +396,8 @@ const INBOUND = { ...BROWSER_INBOUND, ...AGENT_INBOUND, ...STREAM_INBOUND } as c
 // from a session that has never acked as **success** (#457), so a dropped `input:key` would be
 // reported to an MCP caller as an input that landed.
 //
-// Exactly the twelve browser requests that declare a required `requestId`. The relay maps each to the
+// Every browser request that declares a required `requestId` except `device:lease`, which names no
+// session to answer on. The relay maps each to the
 // reply its own waiter reads; `scripts/__tests__/correlatedRequestsGated.test.mjs` derives that set
 // from the protocol and holds all three lists to it.
 const ANSWERABLE = {
@@ -512,7 +513,7 @@ export function parseInbound(raw: unknown): ParseResult {
   const result = INBOUND[known].safeParse(frame)
   if (!result.success) {
     const detail = z.prettifyError(result.error)
-    // Second stage, and only for the twelve. If the envelope stands on its own, the failure is in the
+    // Second stage, and only for these. If the envelope stands on its own, the failure is in the
     // payload and the relay has an address and a correlator to answer with — see `ANSWERABLE`.
     if (Object.hasOwn(ANSWERABLE, known)) {
       const answerable = known as AnswerableType

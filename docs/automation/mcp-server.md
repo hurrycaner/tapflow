@@ -177,6 +177,10 @@ The server gives the coding agent two pieces of guidance, so a request as short 
 
 The instructions are about 400 tokens in every session. The testing guide is about 1,200 tokens, spent only when the agent calls it.
 
+## Apps launch without the network hook {#no-network-hook}
+
+Apps the MCP server launches, and apps the flow runner launches, run without tapflow's iOS network hook. The hook is a library tapflow injects into every app on a simulator so the dashboard's offline toggle can tell the app it has lost its connection, and SDKs with integrity checks, such as identity-verification and bank-linking SDKs, treat an injected library as tampering and can render a blank screen. Without it they render normally, and the dashboard's offline toggle is unavailable on these sessions.
+
 ## Watch the device a coding agent drives {#watch-the-device}
 
 `connect_device` returns `watchUrl` in its result. Open that link in a browser to watch, live, the device the coding agent is driving. The tool description tells the coding agent to hand the link to the person who asked, so when you ask for something like "test the login screen", the coding agent gives you the link as it starts testing.

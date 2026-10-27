@@ -1,5 +1,17 @@
 # @tapflowio/protocol
 
+## 0.30.0
+
+### Minor Changes
+
+- 724835d: An app can be launched with launch arguments and, on iOS, environment variables (#1047). A flow writes `launchApp: { arguments, env }`, and MCP's `launch_app` takes the same two inputs. Arguments are a map of strings, whole numbers, booleans and lists of strings: iOS receives them as `-key value` after the bundle id, which `UserDefaults` reads, and Android as intent extras typed by value. `env` reaches the app's process on iOS and is refused on Android, which has no such channel. A launch carrying either restarts a running app, since a running process has already read its arguments.
+
+  Nothing is dropped silently. One check in `@tapflowio/protocol/launch` refuses the same keys and values at flow load, at the MCP tool, at the relay and at the agent: fractions, keys written with their iOS dash, environment names tapflow's network hook depends on, and launches longer than 8,192 characters. The relay advertises `launch-options` in `agents:listed.features` and refuses arguments for an agent without the `launch-options` capability; clients check the feature before sending, and fail a launch whose `app:launch-done` does not name the applied keys. Run records show argument values and mask env values.
+
+- d5432ce: An app can have launch defaults in `tapflow.config.json` (#1047): `launch.<bundle id>` with `arguments`, `env`, and `envFrom`, which reads an environment value from another variable by name so a secret stays in `.env`. The relay merges them into every `app:launch` for that app (the dashboard's Launch button, MCP `launch_app`, a flow's `launchApp`), key by key with the caller's values winning. An invalid entry, an unset `envFrom` variable, or one naming the relay's own secrets stops the relay from starting; only the commands that start a relay read the section, so `tapflow doctor` and the agent are unaffected.
+
+  Defaults a device cannot take are left out with a warning rather than failing the launch: env on an agent without the new `launch-env` capability (only iOS has it), everything on an agent without `launch-options`. A launch carrying only defaults is marked `defaultsOnly` to the agent, and Android launches without them when no single launcher activity resolves. `app:launch-done.applied` names what reached the app; `RelayClient.launchApp` and `TapflowClient.launchApp` return it, `FlowDriver.launchApp` may resolve to it, run records append the defaults' keys to the `launchApp` step, and MCP's `launch_app` result carries it.
+
 ## 0.29.0
 
 ### Minor Changes
@@ -21,7 +33,6 @@
 ### Patch Changes
 
 - fe644c9: `device:ready` carries an optional `payload.cold`: whether this boot brought the device up, as opposed to finding it already running. Both agents report it. The relay's per-host boot gate, in this release, charges a boot by it. Absent means unknown, never `false`.
-
 
 - 0e18ee1: Follow-ups to service tiers. **The feature list is renamed from `allow` to `keep`** (`serviceTier.keep`, `tapflow flow run --keep push,photos`) before any release carried it: "allow push" read as granting the app a permission. `--service-tier stock --keep ...` is refused, since stock switches nothing off. The run record keeps the tier a run asked for (`serviceTier`, migration 018), and the run page shows it. The dashboard marks a running device a run left slim (**Most services off**) and says in the info card that a restart turns its services back on. `tapflow doctor` counts devices by tier (`on (2 devices: 1 lean, 1 slim now)`). And a simulator whose override marker cannot be read is put back on its plist defaults for every label a tier can touch, instead of having its current overrides recorded as the originals and left off for good: `LeanStore` takes the managed labels as its second constructor argument (`MANAGED_LABELS`).
 

@@ -1,14 +1,28 @@
 import os from 'os'
-import { spawnSync } from 'child_process'
+import { execFile } from 'child_process'
 import type { MemoryPressure } from '@tapflowio/protocol'
 
-// Both reads are synchronous on the agent's event loop, and fork is slowest under exactly the memory pressure they
-// report. A read that times out is no reading.
+// Both reads run every 5 s on the agent's event loop, which also carries every video frame and touch move.
+// They were `spawnSync` and held that loop for 4 ms in a built agent and ~200 ms under `pnpm dev`, which showed
+// as a hitch in a drag every 5 s: contributing/agent-event-loop-blocking.md. Asynchronous, and by absolute path,
+// which is where most of the dev-only cost was. A read that fails or times out is no reading.
 const SPAWN_TIMEOUT_MS = 1_000
+const VM_STAT = '/usr/bin/vm_stat'
+const SYSCTL = '/usr/sbin/sysctl'
+
+function run(cmd: string, args: string[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { encoding: 'utf8', timeout: SPAWN_TIMEOUT_MS, killSignal: 'SIGKILL' },
+      (err, stdout) => resolve(err ? null : stdout))
+  })
+}
 
 const PRESSURE_LEVELS: Record<string, MemoryPressure> = { '1': 'normal', '2': 'warn', '4': 'critical' }
 
-export function createResourceSampler() {
+/** `tools` points the two reads somewhere else, for tests. */
+export function createResourceSampler(tools: { vmStat?: string; sysctl?: string } = {}) {
+  const vmStat = tools.vmStat ?? VM_STAT
+  const sysctl = tools.sysctl ?? SYSCTL
   let lastCpuTimes: { idle: number; total: number } | null = null
 
   function getCpuPercent(): number {
@@ -30,12 +44,12 @@ export function createResourceSampler() {
   }
 
   // macOS: active + wired + compressed pages only. Falls back to os.freemem() on other OS.
-  function getMemoryUsage(): { memUsedMB: number; memTotalMB: number } {
+  async function getMemoryUsage(): Promise<{ memUsedMB: number; memTotalMB: number }> {
     const memTotalMB = Math.round(os.totalmem() / 1024 / 1024)
+    const stdout = await run(vmStat, [])
     try {
-      const { stdout, status } = spawnSync('vm_stat', [], { encoding: 'utf8', timeout: SPAWN_TIMEOUT_MS })
-      if (status !== 0 || !stdout) throw new Error('vm_stat failed')
-      const lines = (stdout as string).split('\n')
+      if (!stdout) throw new Error('vm_stat failed')
+      const lines = stdout.split('\n')
       const pageSize = parseInt(lines[0]?.match(/page size of (\d+)/)?.[1] ?? '16384')
       const get = (key: string) => {
         const m = lines.find((l) => l.startsWith(key))?.match(/:\s*(\d+)/)
@@ -50,10 +64,10 @@ export function createResourceSampler() {
 
   // The kernel's verdict rather than a percentage of ours: an 8 GB Mac runs near-full and compressing all the
   // time, and only the kernel knows when that has stopped keeping up. macOS only; elsewhere there is no answer.
-  function getMemoryPressure(): MemoryPressure | undefined {
+  async function getMemoryPressure(): Promise<MemoryPressure | undefined> {
     if (os.platform() !== 'darwin') return undefined
-    const { stdout, status } = spawnSync('sysctl', ['-n', 'kern.memorystatus_vm_pressure_level'], { encoding: 'utf8', timeout: SPAWN_TIMEOUT_MS })
-    if (status !== 0 || typeof stdout !== 'string') return undefined
+    const stdout = await run(sysctl, ['-n', 'kern.memorystatus_vm_pressure_level'])
+    if (stdout === null) return undefined
     return PRESSURE_LEVELS[stdout.trim()]
   }
 

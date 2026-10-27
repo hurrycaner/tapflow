@@ -479,6 +479,7 @@ export class AndroidAgent implements DeviceAgent, NetworkControlCapability {
   private releaseStallWatch: (() => void) | null = null
   private relayUrl: string | null = null
   private resourcesTimer: ReturnType<typeof setInterval> | null = null
+  private resourcesInFlight: WebSocket | null = null
   private readonly resources = createResourceSampler()
   private _stopping = false
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -598,8 +599,8 @@ export class AndroidAgent implements DeviceAgent, NetworkControlCapability {
               this.handleRelayMessage(m as { type: string; sessionId: string; requestId?: string; payload?: unknown })
             } catch { /* ignore malformed */ }
           })
-          this.reportResources()
-          this.resourcesTimer = setInterval(() => this.reportResources(), 5000)
+          void this.reportResources()
+          this.resourcesTimer = setInterval(() => { void this.reportResources() }, 5000)
           this.lastPingAt = null
           this.lastSocketError = undefined
           ws.on('ping', () => { this.lastPingAt = Date.now() })
@@ -737,23 +738,37 @@ export class AndroidAgent implements DeviceAgent, NetworkControlCapability {
     }, delay)
   }
 
-  private reportResources(): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
-    const bootedCount = Array.from(this.deviceStates.values()).filter((s) => s.scrcpySession !== null || s.emulatorVideo !== null).length
-    const slotsTotal = this.deviceStates.size
-    const { memUsedMB, memTotalMB } = this.resources.getMemoryUsage()
-    this.sendOn(this.ws, {
-      type: 'agent:resources',
-      resources: {
-        cpuPercent: this.resources.getCpuPercent(),
-        memUsedMB,
-        memTotalMB,
-        slotsAvailable: Math.max(0, slotsTotal - bootedCount),
-        slotsTotal,
-        reportedAt: Date.now(),
-        memoryPressure: this.resources.getMemoryPressure(),
-      },
-    })
+  /** Samples off the event loop, then reports. One sample at a time per socket, so a slow one (bounded by its
+   *  1 s timeout) is not stacked by the next tick; keyed by socket, so a reconnect is not skipped behind the
+   *  old socket's sample. Slots and the clock are read after the sample, when the report leaves. */
+  private async reportResources(): Promise<void> {
+    const ws = this.ws
+    if (!ws || ws.readyState !== WebSocket.OPEN || this.resourcesInFlight === ws) return
+    this.resourcesInFlight = ws
+    try {
+      const [{ memUsedMB, memTotalMB }, memoryPressure] = await Promise.all([
+        this.resources.getMemoryUsage(),
+        this.resources.getMemoryPressure(),
+      ])
+      // A reconnect while sampling replaced the socket: this report has nowhere to go.
+      if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) return
+      const bootedCount = Array.from(this.deviceStates.values()).filter((s) => s.scrcpySession !== null || s.emulatorVideo !== null).length
+      const slotsTotal = this.deviceStates.size
+      this.sendOn(ws, {
+        type: 'agent:resources',
+        resources: {
+          cpuPercent: this.resources.getCpuPercent(),
+          memUsedMB,
+          memTotalMB,
+          slotsAvailable: Math.max(0, slotsTotal - bootedCount),
+          slotsTotal,
+          reportedAt: Date.now(),
+          memoryPressure,
+        },
+      })
+    } finally {
+      if (this.resourcesInFlight === ws) this.resourcesInFlight = null
+    }
   }
 
   private cleanupDeviceState(state: DeviceState): void {

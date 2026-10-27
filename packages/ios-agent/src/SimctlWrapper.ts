@@ -494,6 +494,18 @@ export class SimctlWrapper {
     await this.runner.exec('spawn', udid, 'launchctl', 'setenv', name, value)
   }
 
+  /**
+   * Remove an environment variable from `launchd_sim`, the inverse of {@link setSimulatorEnv}.
+   *
+   * An automation session uses it to clear the hook variable (`DYLD_INSERT_LIBRARIES`) that a
+   * dashboard boot left behind, because some SDKs read it as a tampering signal. dyld reads the
+   * environment at process start, so processes already running are unaffected; only the next
+   * launch changes.
+   */
+  async unsetSimulatorEnv(udid: string, name: string): Promise<void> {
+    await this.runner.exec('spawn', udid, 'launchctl', 'unsetenv', name)
+  }
+
   async showSoftwareKeyboard(udid: string): Promise<void> {
     await this.kbd.show(udid)
   }

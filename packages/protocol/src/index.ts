@@ -459,6 +459,7 @@ export interface AppInstallToAgent {
   }
 }
 
+// The relay also adds `automation: boolean` to the payload; undeclared on purpose, see the note above `DeviceBoot`.
 export interface AppLaunchToAgent {
   type: 'app:launch'
   sessionId: string
@@ -872,13 +873,15 @@ export type NetworkUnavailableReason =
    */
   | 'hooks-not-installed'
   /** Nothing was delivered for this boot — a re-arm that did not happen, or a device booted outside
-   *  tapflow. Distinct from the above because the answer is to reboot the device, not to give up. */
+   *  tapflow. Distinct from the above because the answer is to reboot the device, not to give up.
+   *  Also the designed steady state of an automation session (MCP, flow runner), which disarms on
+   *  purpose; there a reboot changes nothing. */
   | 'not-armed'
   /**
    * Delivered, and waiting for an app to run under it.
    *
    * **The member that separates the two above from a device that is simply not being used yet.** On
-   * iOS the injection is put in place when the device boots but can only name its target when an app
+   * iOS a dashboard session puts the injection in place when the device boots, but it can only name its target when an app
    * is launched, so between those two moments nothing has been proved either way — and both of the
    * reasons above would say something false about it. `not-armed` prescribes a reboot, which fixes
    * nothing here; `hooks-not-installed` says the agent cannot reach inside the app, which nothing has
@@ -1868,6 +1871,7 @@ export interface SessionLeave {
 
 // `external` and `automation` are added by the relay on the way through — the browser never sets them.
 // Undeclared on purpose: the parser strips both from what a browser sends, and the relay sets them after it.
+// `app:launch` carries the same relay-added `automation` (see `AppLaunchToAgent`), for the same reason.
 export interface DeviceBoot {
   type: 'device:boot'
   sessionId: string
@@ -1976,6 +1980,7 @@ export interface AppClearState {
  *  group in `.changeset/config.json` locks protocol, agent-core, both agents and the relay together, so
  *  the in-repo skew window is zero; a third-party agent predating this is a release-note matter. A
  *  permanent fallback would be a fifth correlation strategy in the layer whose goal is to have one. */
+// The relay also adds `automation: boolean` to the payload; undeclared on purpose, see the note above `DeviceBoot`.
 export interface OpenUrl {
   type: 'open-url'
   sessionId: string

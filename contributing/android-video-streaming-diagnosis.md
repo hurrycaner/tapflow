@@ -37,7 +37,7 @@ The scrcpy official FAQ documents the same error ("then try with another encoder
 | `google_apis` | stable, H.264 works correctly | ✅ |
 | `default` (AOSP) | minimal configuration | - |
 
-Apple Silicon: use `system-images;android-34;google_apis;arm64-v8a`.
+Apple Silicon: use `system-images;android-35;google_apis;arm64-v8a` — the level `tapflow setup android` installs (`AVD_IMAGE_API`).
 
 ### Re-verification (2026-06-06, scrcpy 3.3)
 
@@ -57,7 +57,7 @@ All four stream with no crash. The original crash is the H.264 **even-width requ
 ```bash
 adb push scrcpy-server.jar /data/local/tmp/scrcpy-server.jar
 adb shell CLASSPATH=/data/local/tmp/scrcpy-server.jar \
-  app_process / com.genymobile.scrcpy.Server 3.1 \
+  app_process / com.genymobile.scrcpy.Server 3.3 \
   scid=00000000 list_encoders=true video=true audio=false control=false &
 sleep 2
 adb logcat -d | grep -i "encoder\|scrcpy"
@@ -135,17 +135,9 @@ Per Apple's official docs, all of the following are **treated as occluded**:
 
 ### Code
 
-`EmulatorLauncher.ts` — `launch()` method:
-
-```typescript
-const proc = spawn(getEmulatorPath(), [
-  '-avd', avdName,
-  '-no-audio',
-  '-no-snapshot',
-  '-no-window',   // avoid macOS occlusion
-  '-gpu', 'host', // keep Metal acceleration
-], { detached: true, stdio: 'ignore' })
-```
+`EmulatorLauncher.ts` — `buildEmulatorArgs()` builds the argument list. The two that matter here are
+`-no-window` (avoid macOS occlusion) and `-gpu host` (keep Metal acceleration); `-no-audio` is added only
+when audio output is off.
 
 ### Reference notes gathered during research
 
@@ -156,7 +148,9 @@ const proc = spawn(getEmulatorPath(), [
 
 ### Alternative approach (if `-no-window` conflicts with a requirement)
 
-You can use the emulator gRPC API's `streamScreenshot` RPC to replace scrcpy entirely. Because frames are produced directly inside the emulator process, it may bypass SurfaceFlinger's vsync path. Not yet verified.
+You can use the emulator gRPC API's `streamScreenshot` RPC to replace scrcpy entirely. Because frames are produced directly inside the emulator process, it may bypass SurfaceFlinger's vsync path.
+
+**Taken — now the emulator default.** `pickAndroidBackend` sends `emulator-*` serials by default (`TAPFLOW_ANDROID_BACKEND=scrcpy` overrides it) through `EmulatorGrpcClient.streamScreenshot` → `EmulatorVideo`, bypassing the guest encoder; scrcpy stays for real devices and as the fallback.
 
 ---
 
