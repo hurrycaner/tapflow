@@ -2810,7 +2810,7 @@ describe('IOSAgent', () => {
       const hookDylib = path.join(dir, 'libtapflow-nethook.dylib')
       fs.writeFileSync(hookDylib, '')
       return new SimulatorNetwork(
-        { setStatusBarOffline: async () => {}, setSimulatorEnv: async () => {} },
+        { setStatusBarOffline: async () => {}, setSimulatorEnv: async () => {}, unsetSimulatorEnv: async () => {} },
         {
           filterHostBinary: host,
           conditionDir: dir,

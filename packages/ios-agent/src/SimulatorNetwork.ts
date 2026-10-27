@@ -251,6 +251,7 @@ type FilterVerdict = 'unavailable' | 'lost'
 interface SimctlForNetwork {
   setStatusBarOffline(udid: string, offline: boolean): Promise<void>
   setSimulatorEnv(udid: string, name: string, value: string): Promise<void>
+  unsetSimulatorEnv(udid: string, name: string): Promise<void>
 }
 
 export class SimulatorNetwork {
@@ -414,6 +415,34 @@ export class SimulatorNetwork {
     // whose remedy is to launch one, which would never help.
     await this.simctl.setSimulatorEnv(udid, 'DYLD_INSERT_LIBRARIES', this.dylib)
     this.armed.add(udid)
+  }
+
+  /**
+   * Run a device with NO injected library, and make `state()` say so.
+   *
+   * Fintech SDKs (Plaid, Pinwheel) read `DYLD_INSERT_LIBRARIES` in the app's environment as a
+   * tampering signal and render a blank WebView, so an automation session has to launch its app
+   * unhooked. `arm()` sets that variable for the whole simulator, which is why the opposite call is
+   * needed and not merely "do not arm".
+   *
+   * Three things, because each covers what the others cannot. `forgetLocked` clears the memory and
+   * the filter rule, so nothing here is duplicated from it. The verdict file is removed on top
+   * because `forgetLocked` leaves it: a verdict written by a previously hooked app would otherwise
+   * be read by `state()` before `armed` is consulted and answer `available: true` for a device that
+   * has no hooks. `launchctl unsetenv` is what actually takes the variable out of the next launch.
+   *
+   * **Memory first, unsetenv last.** If unsetenv throws, the caller warns and carries on, and
+   * `state()` must already be answering `not-armed` rather than something that was true of the
+   * hooked session.
+   */
+  async disarm(udid: string): Promise<void> {
+    return this.serialize(() => this.disarmLocked(udid))
+  }
+
+  private async disarmLocked(udid: string): Promise<void> {
+    await this.forgetLocked(udid)
+    rmSync(this.verdictPath(udid), { force: true })
+    await this.simctl.unsetSimulatorEnv(udid, 'DYLD_INSERT_LIBRARIES')
   }
 
   /**
