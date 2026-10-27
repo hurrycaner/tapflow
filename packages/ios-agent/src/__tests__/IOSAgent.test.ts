@@ -210,6 +210,7 @@ function mockSimctl(booted: boolean | 'unknown' = false): SimctlWrapper {
     // assertion below read a state assembled from a failure nobody could see.
     setStatusBarOffline: vi.fn().mockResolvedValue(undefined),
     setSimulatorEnv: vi.fn().mockResolvedValue(undefined),
+    unsetSimulatorEnv: vi.fn().mockResolvedValue(undefined),
     // Every boot stands the simulator up (#910). Absent, that step threw into the rotation queue's
     // `.catch` and every boot test ran the failure path without saying so.
     rotate: vi.fn().mockResolvedValue(undefined),
@@ -720,6 +721,92 @@ describe('IOSAgent', () => {
       expect(stopIfDevice).toHaveBeenCalledWith('dev-1')
       const shutdownOrder = (simctl.shutdown as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!
       expect(stopIfDevice.mock.invocationCallOrder[0]!).toBeLessThan(shutdownOrder)
+
+      agent.disconnect()
+      browser.close()
+    })
+  })
+
+  describe('network hook on automation boots', () => {
+    afterEach(() => { vi.restoreAllMocks() })
+
+    const DYLD = 'DYLD_INSERT_LIBRARIES'
+    const dyldSets = (simctl: SimctlWrapper) =>
+      (simctl.setSimulatorEnv as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[1] === DYLD)
+
+    async function bootAs(simctl: SimctlWrapper, clientKind?: string) {
+      const browser = new WebSocket(`ws://localhost:${port}`)
+      await waitForOpen(browser)
+      const agent = new IOSAgent({ intervalMs: 50 }, simctl)
+      await agent.connect(`ws://localhost:${port}`)
+      browser.send(JSON.stringify({ type: 'session:start', sessionId: agent.sessionId, ...(clientKind ? { clientKind } : {}) }))
+      await waitForType(browser, 'session:joined')
+      return { agent, browser }
+    }
+    const boot = async (browser: WebSocket, agent: IOSAgent, requestId: string) => {
+      browser.send(JSON.stringify({ type: 'device:boot', requestId, sessionId: agent.sessionId, payload: { deviceId: 'dev-1' } }))
+      await waitForType(browser, 'device:ready')
+    }
+
+    it.each(['mcp', 'flow-runner'] as const)('a boot by a %s holder unsets DYLD_INSERT_LIBRARIES and never sets it', async (clientKind) => {
+      const simctl = mockSimctl(true)
+      const { agent, browser } = await bootAs(simctl, clientKind)
+      await boot(browser, agent, 'rq-auto')
+
+      expect(simctl.unsetSimulatorEnv).toHaveBeenCalledWith('dev-1', DYLD)
+      expect(dyldSets(simctl)).toEqual([])
+
+      agent.disconnect()
+      browser.close()
+    })
+
+    it.each([['dashboard'], [undefined]] as const)('a boot by a %s holder sets DYLD_INSERT_LIBRARIES and does not unset it', async (clientKind) => {
+      const simctl = mockSimctl(true)
+      const { agent, browser } = await bootAs(simctl, clientKind)
+      await boot(browser, agent, 'rq-dash')
+
+      expect(dyldSets(simctl)).toHaveLength(1)
+      expect(simctl.unsetSimulatorEnv).not.toHaveBeenCalled()
+
+      agent.disconnect()
+      browser.close()
+    })
+
+    it('a dashboard boot after an automation boot of the same device sets DYLD_INSERT_LIBRARIES again', async () => {
+      const simctl = mockSimctl(true)
+      const { agent, browser: automation } = await bootAs(simctl, 'mcp')
+      await boot(automation, agent, 'rq-auto')
+      expect(dyldSets(simctl)).toEqual([])
+
+      automation.send(JSON.stringify({ type: 'session:leave', sessionId: agent.sessionId }))
+      // `session:leave` is unanswered; closing the socket after it is what lets the next holder join.
+      automation.close()
+      const dashboard = new WebSocket(`ws://localhost:${port}`)
+      await waitForOpen(dashboard)
+      dashboard.send(JSON.stringify({ type: 'session:start', sessionId: agent.sessionId, clientKind: 'dashboard' }))
+      await waitForType(dashboard, 'session:joined')
+      // Not `boot()`: joining replays a `device:ready` to the new holder, so waiting for one would return
+      // before this boot reached the agent. The arm itself is the signal.
+      dashboard.send(JSON.stringify({ type: 'device:boot', requestId: 'rq-dash', sessionId: agent.sessionId, payload: { deviceId: 'dev-1' } }))
+      await vi.waitFor(() => expect(dyldSets(simctl)).toHaveLength(1))
+      const unsetOrder = (simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!
+      const setOrder = (simctl.setSimulatorEnv as ReturnType<typeof vi.fn>).mock.invocationCallOrder
+        .filter((_, i) => (simctl.setSimulatorEnv as ReturnType<typeof vi.fn>).mock.calls[i]![1] === DYLD)[0]!
+      expect(setOrder).toBeGreaterThan(unsetOrder)
+
+      agent.disconnect()
+      dashboard.close()
+    })
+
+    it('an automation boot still answers device:ready when unsetting DYLD_INSERT_LIBRARIES fails, and warns once', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const simctl = mockSimctl(true)
+      ;(simctl.unsetSimulatorEnv as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('spawn failed'))
+      const { agent, browser } = await bootAs(simctl, 'mcp')
+      await boot(browser, agent, 'rq-fail')
+
+      const disarmWarnings = warn.mock.calls.filter((c) => String(c.join(' ')).includes('could not disarm'))
+      expect(disarmWarnings).toHaveLength(1)
 
       agent.disconnect()
       browser.close()

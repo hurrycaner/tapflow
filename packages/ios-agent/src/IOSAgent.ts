@@ -957,12 +957,17 @@ export class IOSAgent implements DeviceAgent, NetworkControlCapability {
       // ready. Clearing an app now and installing it after leaves a clean container.
       const runResetReport = runReset ? await this.resetForRun(deviceId, runReset, () => seq !== state.bootSeq) : undefined
       if (seq !== state.bootSeq) { this.abandonBoot(state, seq, sessionId, requestId); return }
-      // Arm the network injection while nothing is running on the device yet — dyld reads the
+      // Dashboard boots arm the network injection while nothing is running on the device yet — dyld reads the
       // environment at process start, so anything launched before this is unhooked for its whole life.
-      // Best-effort: the network toggle is opt-in and a device that cannot be armed says so through
+      // Automation boots (MCP, flow runner) must launch unhooked instead: fintech SDKs (Plaid, Pinwheel) read
+      // DYLD_INSERT_LIBRARIES as tampering and render a blank WebView. That is a disarm and not a skip,
+      // because a still-booted device carries the variable from an earlier dashboard boot; the next
+      // dashboard boot arms it again.
+      // Best-effort: the network toggle is opt-in and a device that cannot be (dis)armed says so through
       // `network:state.available`, which is a better answer than a boot that fails for it.
-      await this.network.arm(deviceId).catch((e: unknown) => {
-        logger.warn('could not arm the network injection:', (e as Error).message)
+      const networkStep = automation ? 'disarm' : 'arm'
+      await (automation ? this.network.disarm(deviceId) : this.network.arm(deviceId)).catch((e: unknown) => {
+        logger.warn(`could not ${networkStep} the network injection:`, (e as Error).message)
       })
       // **Stand it up (#910).** A fresh viewer always starts portrait, and a simulator left turned —
       // by a session whose undo never arrived, or one an agent restart reset the memory of — would
